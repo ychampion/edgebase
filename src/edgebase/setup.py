@@ -11,15 +11,15 @@ from .git import run_git
 from .hooks import (
     install_claude_hooks,
     install_codex_hooks,
-    install_git_hook,
+    install_git_hooks,
     uninstall_claude_hooks,
     uninstall_codex_hooks,
-    uninstall_git_hook,
+    uninstall_git_hooks,
 )
+from .hosts import ALL_AGENTS, normalize_agents
 from .indexer import index_repo
 
 
-ALL_AGENTS = ("claude", "codex", "cursor", "gemini", "opencode", "windsurf")
 AGENT_DOC_START = "<!-- EDGEBASE:START -->"
 AGENT_DOC_END = "<!-- EDGEBASE:END -->"
 CLAUDE_SKILL_START = "<!-- EDGEBASE:CLAUDE-SKILL:START -->"
@@ -86,6 +86,22 @@ EDGEBASE_SLASH_COMMANDS = (
         '"<goal>" --test "command: result"',
         " $ARGUMENTS --budget 1200",
         "Summarize the current patch, changed files, explicit test evidence, risk, and review focus.",
+    ),
+    SlashCommandSpec(
+        "edgebase-finish",
+        ("finish",),
+        "Write the final Patch Passport for the current work.",
+        '"<goal>" --test "command: result"',
+        " $ARGUMENTS --budget 1200",
+        "Write `.edgebase/passports/latest.md` and `.json`, separating inferred required checks from explicit test evidence.",
+    ),
+    SlashCommandSpec(
+        "edgebase-status",
+        ("status",),
+        "Show active Edgebase work-contract status.",
+        "[--json]",
+        " $ARGUMENTS",
+        "Show active goal, freshness, changed files, stale files, elevated tests, missing recorded checks, and latest artifacts.",
     ),
     SlashCommandSpec(
         "edgebase-preflight-status",
@@ -168,6 +184,7 @@ def setup_repo(
     install_hooks: bool = True,
     write_agents_md: bool = True,
     command: str | None = None,
+    strict: bool = False,
 ) -> list[SetupResult]:
     repo_root = Path(root).resolve()
     selected = normalize_agents(agents)
@@ -182,7 +199,7 @@ def setup_repo(
         results.append(write_agent_docs(repo_root))
 
     if "claude" in selected:
-        results.extend(setup_claude(repo_root, scope, install_hooks, command))
+        results.extend(setup_claude(repo_root, scope, install_hooks, command, strict))
     if "codex" in selected:
         results.extend(setup_codex(repo_root, scope, install_hooks, command))
     if "cursor" in selected:
@@ -196,11 +213,12 @@ def setup_repo(
 
     if install_hooks:
         try:
-            path = install_git_hook(repo_root)
+            paths = install_git_hooks(repo_root)
         except RuntimeError as exc:
             results.append(SetupResult(repo_root, "skipped", str(exc)))
         else:
-            results.append(SetupResult(path, "updated", "git post-commit refresh hook"))
+            for path in paths:
+                results.append(SetupResult(path, "updated", "git freshness refresh hook"))
     return results
 
 
@@ -227,26 +245,11 @@ def disable_repo(
     if "windsurf" in selected:
         results.extend(disable_windsurf(scope))
     if remove_hooks:
-        results.append(SetupResult(uninstall_git_hook(repo_root), "updated", "removed git post-commit refresh hook"))
+        for path in uninstall_git_hooks(repo_root):
+            results.append(SetupResult(path, "updated", "removed git freshness refresh hook"))
     if remove_agent_docs:
         results.append(remove_agent_docs_block(repo_root))
     return results
-
-
-def normalize_agents(agents: list[str] | None) -> set[str]:
-    if not agents:
-        return set(ALL_AGENTS)
-    normalized: set[str] = set()
-    for item in agents:
-        for part in item.split(","):
-            name = part.strip().lower()
-            if name == "all":
-                normalized.update(ALL_AGENTS)
-            elif name:
-                if name not in ALL_AGENTS:
-                    raise ValueError(f"Unknown agent `{name}`. Supported: {', '.join(ALL_AGENTS)}")
-                normalized.add(name)
-    return normalized
 
 
 def stdio_config(repo_root: Path, command: str | None = None) -> dict[str, object]:
@@ -355,7 +358,7 @@ def remove_agent_docs_block(repo_root: Path) -> SetupResult:
 
 
 def setup_claude(
-    repo_root: Path, scope: str, install_hooks: bool, command: str | None
+    repo_root: Path, scope: str, install_hooks: bool, command: str | None, strict: bool = False
 ) -> list[SetupResult]:
     results: list[SetupResult] = []
     if scope in {"project", "both"}:
@@ -400,8 +403,9 @@ def setup_claude(
             else:
                 results.append(SetupResult(command_skill_path, "updated", f"Claude Code project skill /{spec.name}"))
         if install_hooks:
-            hooks_path = install_claude_hooks(repo_root)
-            results.append(SetupResult(hooks_path, "updated", "Claude Code automatic prompt and freshness hooks"))
+            hooks_path = install_claude_hooks(repo_root, strict=strict)
+            mode = "strict" if strict else "warn-only"
+            results.append(SetupResult(hooks_path, "updated", f"Claude Code automatic prompt and freshness hooks ({mode})"))
     if scope in {"global", "both"}:
         results.append(
             SetupResult(
@@ -595,7 +599,67 @@ def setup_codex(repo_root: Path, scope: str, install_hooks: bool, command: str |
         path = Path.home() / ".codex" / "config.toml"
         upsert_codex_toml(path, repo_root, command)
         results.append(SetupResult(path, "updated", "Codex global MCP server"))
+        global_skill_root = Path.home() / ".codex" / "skills"
+        append_marked_skill_result(
+            results,
+            global_skill_root / "edgebase" / "SKILL.md",
+            CODEX_SKILL_START,
+            codex_skill_content(repo_root, command),
+            "Codex global skill /edgebase",
+        )
+        append_marked_skill_result(
+            results,
+            global_skill_root / "goal" / "SKILL.md",
+            CODEX_GOAL_SKILL_START,
+            codex_goal_skill_content(repo_root, command, "goal", CODEX_GOAL_SKILL_START, CODEX_GOAL_SKILL_END),
+            "Codex global skill /goal",
+        )
+        append_marked_skill_result(
+            results,
+            global_skill_root / "edgebase-goal" / "SKILL.md",
+            CODEX_EDGEBASE_GOAL_SKILL_START,
+            codex_goal_skill_content(
+                repo_root,
+                command,
+                "edgebase-goal",
+                CODEX_EDGEBASE_GOAL_SKILL_START,
+                CODEX_EDGEBASE_GOAL_SKILL_END,
+            ),
+            "Codex global skill /edgebase-goal",
+        )
+        for spec in EDGEBASE_SLASH_COMMANDS:
+            marker_start, _ = slash_command_markers("codex", spec.name)
+            append_marked_skill_result(
+                results,
+                global_skill_root / spec.name / "SKILL.md",
+                marker_start,
+                codex_command_skill_content(repo_root, command, spec),
+                f"Codex global skill /{spec.name}",
+            )
     return results
+
+
+def append_marked_skill_result(
+    results: list[SetupResult],
+    path: Path,
+    marker: str,
+    content: str,
+    detail: str,
+) -> None:
+    try:
+        written = write_marked_skill(path, marker, content)
+    except RuntimeError as exc:
+        results.append(SetupResult(path, "skipped", str(exc)))
+    else:
+        results.append(SetupResult(written, "updated", detail))
+
+
+def write_marked_skill(path: Path, marker: str, content: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and marker not in path.read_text(encoding="utf-8"):
+        raise RuntimeError(f"Refusing to overwrite existing skill without Edgebase marker: {path}")
+    path.write_text(content, encoding="utf-8")
+    return path
 
 
 def install_codex_skill(repo_root: Path, command: str | None) -> Path:
@@ -990,6 +1054,40 @@ def disable_codex(repo_root: Path, scope: str, remove_hooks: bool) -> list[Setup
         path = Path.home() / ".codex" / "config.toml"
         action = "updated" if remove_codex_toml(path) else "skipped"
         results.append(SetupResult(path, action, "Codex global MCP server removed"))
+        global_skill_root = Path.home() / ".codex" / "skills"
+        results.append(
+            SetupResult(
+                uninstall_marked_skill(global_skill_root / "edgebase" / "SKILL.md", CODEX_SKILL_START),
+                "updated",
+                "removed Codex global skill /edgebase",
+            )
+        )
+        results.append(
+            SetupResult(
+                uninstall_marked_skill(global_skill_root / "goal" / "SKILL.md", CODEX_GOAL_SKILL_START),
+                "updated",
+                "removed Codex global skill /goal",
+            )
+        )
+        results.append(
+            SetupResult(
+                uninstall_marked_skill(
+                    global_skill_root / "edgebase-goal" / "SKILL.md",
+                    CODEX_EDGEBASE_GOAL_SKILL_START,
+                ),
+                "updated",
+                "removed Codex global skill /edgebase-goal",
+            )
+        )
+        for spec in EDGEBASE_SLASH_COMMANDS:
+            marker_start, _ = slash_command_markers("codex", spec.name)
+            results.append(
+                SetupResult(
+                    uninstall_marked_skill(global_skill_root / spec.name / "SKILL.md", marker_start),
+                    "updated",
+                    f"removed Codex global skill /{spec.name}",
+                )
+            )
     return results
 
 
@@ -1004,6 +1102,18 @@ def uninstall_codex_skill(repo_root: Path) -> Path:
         except OSError:
             break
     return skill_path
+
+
+def uninstall_marked_skill(path: Path, marker: str) -> Path:
+    if not path.exists() or marker not in path.read_text(encoding="utf-8"):
+        return path
+    path.unlink()
+    for parent in (path.parent, path.parent.parent):
+        try:
+            parent.rmdir()
+        except OSError:
+            break
+    return path
 
 
 def uninstall_codex_goal_skill(repo_root: Path) -> Path:

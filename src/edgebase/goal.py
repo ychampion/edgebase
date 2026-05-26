@@ -275,8 +275,10 @@ def render_patch_passport(contract: WorkContract, files_changed: list[str], test
             lines.append(f"- {format_test_evidence(test)}")
     else:
         lines.append("- No tests recorded by Edgebase.")
+    missing = unrecorded_checks(contract.test_plan, tests_run)
+    if missing:
         lines.append("Required checks not recorded:")
-        append_bullets(lines, contract.test_plan, empty="- No focused check inferred.")
+        append_bullets(lines, missing, empty="- No focused check inferred.")
     lines.append("")
     lines.append("Risk:")
     risks = list(contract.risk_flags)
@@ -375,6 +377,18 @@ def format_test_evidence(test: str) -> str:
         return f"{test} [recorded]"
     command, status = test.rsplit(":", 1)
     return f"{command.strip()} [{status.strip()}]"
+
+
+def unrecorded_checks(required: list[str], tests: list[str]) -> list[str]:
+    recorded = {test_command(test) for test in tests}
+    return [check for check in required if check not in recorded]
+
+
+def test_command(test: str) -> str:
+    if ":" not in test:
+        return test.strip()
+    command, _status = test.rsplit(":", 1)
+    return command.strip()
 
 
 def is_test_path(path: str) -> bool:

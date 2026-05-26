@@ -51,13 +51,17 @@ For every release:
 ```bash
 python3 -m unittest -v
 python3 -m compileall -q src tests
+python3 -m edgebase install-prompt --agent all
 python3 -m edgebase setup --scope project --agents claude,codex,cursor,gemini,opencode
 python3 -m edgebase doctor --scope project --agents claude,codex,cursor,gemini,opencode
 python3 -m edgebase goal "change login hashing behavior" --changed-file tests/test_edgebase.py --json
+python3 -m edgebase goal "change login hashing behavior" --changed-file tests/test_edgebase.py --record --json
 python3 -m edgebase radius tests/test_edgebase.py --goal "change login hashing behavior" --json
+python3 -m edgebase status --json
 python3 -m edgebase preflight refresh "change login hashing behavior" --changed-file tests/test_edgebase.py --json
 python3 -m edgebase preflight status --json
 python3 -m edgebase passport "change login hashing behavior" --test "python3 -m unittest -v: pass"
+python3 -m edgebase finish "change login hashing behavior" --test "python3 -m unittest -v: pass"
 python3 -m edgebase checkpoint "release smoke checkpoint"
 python3 -m edgebase resume
 printf '{"prompt":"change login hashing behavior"}' | python3 -m edgebase hooks claude-user-prompt-submit --root .
@@ -83,11 +87,23 @@ Where binaries are available:
 - Gemini CLI: `gemini mcp list`
 - OpenCode: `opencode mcp list`
 
-For Claude Code, also validate that `.claude/settings.json` contains `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, and `SessionEnd`, and that `.claude/skills/edgebase/SKILL.md`, `.claude/skills/edgebase-goal/SKILL.md`, `.claude/skills/goal/SKILL.md`, and the generated `.claude/skills/edgebase-*/SKILL.md` command skills exist.
+For Claude Code, also validate that `.claude/settings.json` contains `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, and `SessionEnd`, and that `.claude/skills/edgebase/SKILL.md`, `.claude/skills/edgebase-goal/SKILL.md`, `.claude/skills/goal/SKILL.md`, and the generated `.claude/skills/edgebase-*/SKILL.md` command skills exist. Simulate warn-mode and strict-mode `PreToolUse` payloads.
 
-For Codex, validate that `.codex/config.toml` contains `[mcp_servers.edgebase]` and `hooks = true`, `.codex/hooks.json` uses the event-keyed Codex hook shape with `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, and `Stop`, and `.agents/skills/edgebase/SKILL.md`, `.agents/skills/edgebase-goal/SKILL.md`, `.agents/skills/goal/SKILL.md`, and the generated `.agents/skills/edgebase-*/SKILL.md` command skills exist.
+For Codex, validate that `.codex/config.toml` contains `[mcp_servers.edgebase]` and `hooks = true`, `.codex/hooks.json` uses the event-keyed Codex hook shape with `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, and `Stop`, and `.agents/skills/edgebase/SKILL.md`, `.agents/skills/edgebase-goal/SKILL.md`, `.agents/skills/goal/SKILL.md`, and the generated `.agents/skills/edgebase-*/SKILL.md` command skills exist. With global scope, also validate the generated `~/.codex/skills` files.
 
 For clients not installed in the verification environment, validate the generated config shape and the Edgebase MCP stdio handshake.
+
+## Install E2E
+
+Before v1, run temporary-home install tests for every supported host:
+
+- create a fresh temp git repository and temp `$HOME`
+- run `edgebase setup --scope both --agents <host>`
+- inspect generated host config, skills, agent-doc marker, and git hooks
+- simulate MCP initialize, `tools/list`, and `edgebase_goal`
+- simulate Claude/Codex hook payloads where those hooks are supported
+- run `edgebase doctor --scope both --agents <host>`
+- run `edgebase disable --scope both --agents <host>` and verify marker-bounded cleanup
 
 ## Kill Criteria
 

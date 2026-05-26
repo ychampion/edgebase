@@ -20,7 +20,9 @@ from edgebase.commands import shell_join
 from edgebase.context import build_context
 from edgebase.doctor import run_doctor
 from edgebase.goal import build_goal_capsule, build_patch_passport
-from edgebase.preflight import load_preflight_state, preflight_status
+from edgebase.hosts import HOSTS
+from edgebase.preflight import load_preflight_state, preflight_status, prepare_goal_capsule
+from edgebase.runtime import active_goal_path, status_payload, write_finish_passport
 from edgebase.radius import build_change_radius
 from edgebase.graph import build_graph_export, render_dot, render_html, render_json, write_graph_artifacts
 from edgebase.hooks import (
@@ -34,6 +36,7 @@ from edgebase.indexer import index_repo
 from edgebase.mcp import McpServer
 from edgebase.setup import AGENT_DOC_START, EDGEBASE_SLASH_COMMANDS, disable_repo, setup_repo
 from edgebase.store import Store
+from edgebase.team import TEAM_DOC_START, team_disable, team_init
 
 
 class EdgebaseTests(unittest.TestCase):
@@ -297,6 +300,53 @@ class EdgebaseTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout.strip(), f"edgebase {__version__}")
+
+    def test_install_prompt_and_host_capabilities(self) -> None:
+        prompt = render_install_prompt("all")
+        self.assertIn("edgebase setup --scope both --agents all", prompt)
+        self.assertIn("edgebase doctor --scope both --agents all", prompt)
+        self.assertIn("edgebase status --json", prompt)
+        for host in HOSTS.values():
+            self.assertIn(host.display_name, prompt)
+        self.assertTrue(HOSTS["claude"].verified_hooks)
+        self.assertTrue(HOSTS["codex"].project_skills)
+        self.assertFalse(HOSTS["cursor"].hooks)
+
+    def test_status_and_finish_write_runtime_passport_state(self) -> None:
+        with sample_repo() as repo:
+            prepare_goal_capsule(repo, "modify login", ["app/auth.py"], source="test")
+            status = status_payload(repo)
+            self.assertEqual(status["active_goal"], "modify login")
+            self.assertIn("pytest tests/test_auth.py", status["required_checks_unrecorded"])
+
+            payload = write_finish_passport(
+                repo,
+                "modify login",
+                ["pytest tests/test_auth.py: pass"],
+                ["app/auth.py"],
+            )
+            self.assertEqual(payload["missing_tests"], [])
+            self.assertTrue((repo / ".edgebase" / "passports" / "latest.md").exists())
+            updated = status_payload(repo)
+            self.assertEqual(updated["required_checks_unrecorded"], [])
+
+    def test_team_optional_required_and_disable_cleanup(self) -> None:
+        with sample_repo() as repo:
+            team_init(repo, "optional")
+            agents_md = (repo / "AGENTS.md").read_text(encoding="utf-8")
+            self.assertIn(TEAM_DOC_START, agents_md)
+            self.assertIn("Edgebase Recommended", agents_md)
+
+            team_init(repo, "required")
+            required_hook = repo / ".claude" / "hooks" / "edgebase-required.sh"
+            self.assertTrue(required_hook.exists())
+            settings = json.loads((repo / ".claude" / "settings.json").read_text(encoding="utf-8"))
+            self.assertIn("edgebase-required.sh", json.dumps(settings))
+
+            team_disable(repo)
+            agents_md = (repo / "AGENTS.md").read_text(encoding="utf-8")
+            self.assertNotIn(TEAM_DOC_START, agents_md)
+            self.assertFalse(required_hook.exists())
 
     def test_graph_export_model_and_static_artifacts(self) -> None:
         with sample_repo() as repo:
@@ -612,20 +662,37 @@ class EdgebaseTests(unittest.TestCase):
             existing_skill = repo / ".agents" / "skills" / "edgebase-goal" / "SKILL.md"
             existing_skill.parent.mkdir(parents=True, exist_ok=True)
             existing_skill.write_text("# Existing custom skill\n", encoding="utf-8")
+            old_home = os.environ.get("HOME")
+            home_tmp = tempfile.TemporaryDirectory()
+            self.addCleanup(home_tmp.cleanup)
+            os.environ["HOME"] = home_tmp.name
+            existing_global = Path.home() / ".codex" / "skills" / "edgebase-goal" / "SKILL.md"
+            existing_global.parent.mkdir(parents=True, exist_ok=True)
+            existing_global.write_text("# Existing global custom skill\n", encoding="utf-8")
 
-            results = setup_repo(
-                repo,
-                agents=["codex"],
-                scope="project",
-                install_hooks=True,
-                write_agents_md=True,
-            )
+            try:
+                results = setup_repo(
+                    repo,
+                    agents=["codex"],
+                    scope="both",
+                    install_hooks=True,
+                    write_agents_md=True,
+                )
+            finally:
+                if old_home is None:
+                    os.environ.pop("HOME", None)
+                else:
+                    os.environ["HOME"] = old_home
 
             skipped = [result for result in results if result.path == existing_skill]
             self.assertEqual(len(skipped), 1)
             self.assertEqual(skipped[0].action, "skipped")
             self.assertIn("Refusing to overwrite existing Codex skill", skipped[0].detail)
             self.assertEqual(existing_skill.read_text(encoding="utf-8"), "# Existing custom skill\n")
+            skipped_global = [result for result in results if result.path == existing_global]
+            self.assertEqual(len(skipped_global), 1)
+            self.assertEqual(skipped_global[0].action, "skipped")
+            self.assertEqual(existing_global.read_text(encoding="utf-8"), "# Existing global custom skill\n")
             self.assertTrue((repo / ".agents" / "skills" / "edgebase" / "SKILL.md").exists())
             self.assertTrue((repo / ".agents" / "skills" / "goal" / "SKILL.md").exists())
 
@@ -779,6 +846,7 @@ class EdgebaseTests(unittest.TestCase):
             self.assertTrue((repo / ".edgebase" / "graphs" / "latest.html").exists())
             self.assertTrue(preflight_status(repo)["fresh"])
             self.assertEqual(load_preflight_state(repo)["goal"], "change login hashing behavior")
+            self.assertTrue(active_goal_path(repo).exists())
 
     def test_claude_pre_tool_hook_injects_work_contract(self) -> None:
         with sample_repo() as repo:
@@ -802,9 +870,71 @@ class EdgebaseTests(unittest.TestCase):
             data = json.loads(stdout.getvalue())
             output = data["hookSpecificOutput"]
             self.assertEqual(output["hookEventName"], "PreToolUse")
+            self.assertIn("Edgebase pre-edit warning", output["additionalContext"])
+            self.assertIn("no fresh Edgebase Goal Capsule", output["additionalContext"])
+
+            old_stdin = sys.stdin
+            stdout = io.StringIO()
+            try:
+                sys.stdin = io.StringIO(
+                    json.dumps(
+                        {
+                            "goal": "modify login",
+                            "tool_input": {"file_path": str(repo / "app" / "auth.py")},
+                        }
+                    )
+                )
+                with contextlib.redirect_stdout(stdout):
+                    code = handle_claude_pre_tool_use(repo, strict=True)
+            finally:
+                sys.stdin = old_stdin
+            self.assertEqual(code, 0)
+            data = json.loads(stdout.getvalue())
+            output = data["hookSpecificOutput"]
             self.assertEqual(output["permissionDecision"], "deny")
             self.assertIn("no fresh Edgebase Goal Capsule", output["permissionDecisionReason"])
             self.assertIn("/edgebase-preflight-refresh <goal>", output["permissionDecisionReason"])
+
+            prepare_goal_capsule(repo, "modify login", ["app/auth.py"], source="test")
+            old_stdin = sys.stdin
+            stdout = io.StringIO()
+            try:
+                sys.stdin = io.StringIO(
+                    json.dumps(
+                        {
+                            "goal": "modify login",
+                            "tool_input": {"file_path": str(repo / "README.md")},
+                        }
+                    )
+                )
+                with contextlib.redirect_stdout(stdout):
+                    code = handle_claude_pre_tool_use(repo)
+            finally:
+                sys.stdin = old_stdin
+            self.assertEqual(code, 0)
+            data = json.loads(stdout.getvalue())
+            self.assertIn("outside blast radius", data["hookSpecificOutput"]["additionalContext"])
+
+            old_stdin = sys.stdin
+            stdout = io.StringIO()
+            try:
+                sys.stdin = io.StringIO(
+                    json.dumps(
+                        {
+                            "goal": "modify login",
+                            "tool_input": {"file_path": str(repo / "migrations" / "001.sql")},
+                        }
+                    )
+                )
+                with contextlib.redirect_stdout(stdout):
+                    code = handle_claude_pre_tool_use(repo, strict=True)
+            finally:
+                sys.stdin = old_stdin
+            self.assertEqual(code, 0)
+            data = json.loads(stdout.getvalue())
+            output = data["hookSpecificOutput"]
+            self.assertEqual(output["permissionDecision"], "deny")
+            self.assertIn("protected path", output["permissionDecisionReason"])
 
     def test_pre_tool_hook_does_not_block_named_read_tools(self) -> None:
         with sample_repo() as repo:
@@ -908,7 +1038,7 @@ class EdgebaseTests(unittest.TestCase):
                     "-m",
                     "edgebase",
                     "hooks",
-                    "git-post-commit",
+                    "git-refresh",
                     "--root",
                     str(repo.resolve()),
                 ],

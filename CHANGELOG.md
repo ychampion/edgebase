@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Added
+
+- `edgebase bootstrap` for copy-focused, host-aware onboarding prompts.
+- Host capability table covering Claude Code, Codex, Cursor, Gemini CLI, OpenCode, and Windsurf setup surfaces.
+- Active Work Contract state at `.edgebase/session/active-goal.json`, written by prompt hooks and `edgebase goal --record`.
+- `edgebase status` for active goal, freshness, changed files, stale files, elevated tests, unrecorded required checks, and latest artifacts.
+- `edgebase finish` for writing `.edgebase/passports/latest.md` and `.json` without inventing test results.
+- Codex global skill surfaces for `/edgebase`, `/edgebase-goal`, `/goal`, and `/edgebase-*` commands when global setup is selected.
+- Marker-bounded `edgebase team init optional|required` and `edgebase team disable`.
+
+### Changed
+
+- Pre-edit hooks now use the persisted active Work Contract before falling back to preflight state.
+- Claude pre-edit checks warn by default and support opt-in strict denial for missing/stale contracts or protected-path edits.
+- Git freshness hooks now cover `post-commit`, `post-checkout`, `post-merge`, and `post-rewrite`.
+- Patch Passport output now separates inferred required checks from explicitly recorded tests.
+
 ## 0.1.9 - 2026-05-26
 
 ### Added
