@@ -7,11 +7,13 @@ from typing import Any
 
 from . import __version__
 from .context import build_context
+from .goal import build_goal_capsule
 from .indexer import index_repo
 from .store import Store
 
 
 TOOL_NAME = "edgebase_context"
+GOAL_TOOL_NAME = "edgebase_goal"
 
 
 def tool_definition() -> dict[str, Any]:
@@ -44,6 +46,36 @@ def tool_definition() -> dict[str, Any]:
     }
 
 
+def goal_tool_definition() -> dict[str, Any]:
+    return {
+        "name": GOAL_TOOL_NAME,
+        "title": "Edgebase Goal Capsule",
+        "description": "Return an executable Goal Capsule and Work Contract for a coding goal.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "goal": {
+                    "type": "string",
+                    "description": "The coding goal to turn into a work contract.",
+                },
+                "changed_files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional repository-relative files already changed or about to change.",
+                },
+                "budget": {
+                    "type": "integer",
+                    "minimum": 300,
+                    "maximum": 8000,
+                    "description": "Approximate token budget for the returned goal capsule.",
+                },
+            },
+            "required": ["goal"],
+            "additionalProperties": False,
+        },
+    }
+
+
 class McpServer:
     def __init__(self, root: str | Path):
         self.root = Path(root).resolve()
@@ -69,7 +101,7 @@ class McpServer:
             if method == "ping":
                 return self._result(request_id, {})
             if method == "tools/list":
-                return self._result(request_id, {"tools": [tool_definition()]})
+                return self._result(request_id, {"tools": [tool_definition(), goal_tool_definition()]})
             if method == "prompts/list":
                 return self._result(
                     request_id,
@@ -91,35 +123,66 @@ class McpServer:
                                         "required": False,
                                     },
                                 ],
+                            },
+                            {
+                                "name": "goal",
+                                "title": "Edgebase Goal Capsule",
+                                "description": "Fetch an executable Goal Capsule and Work Contract before editing.",
+                                "arguments": [
+                                    {
+                                        "name": "goal",
+                                        "description": "The coding goal to turn into a work contract.",
+                                        "required": True,
+                                    },
+                                    {
+                                        "name": "budget",
+                                        "description": "Approximate token budget.",
+                                        "required": False,
+                                    },
+                                ],
                             }
                         ]
                     },
                 )
             if method == "prompts/get":
                 params = request.get("params") or {}
-                if params.get("name") != "edgebase":
-                    return self._error(request_id, -32602, f"Unknown prompt: {params.get('name')}")
+                name = params.get("name")
                 args = params.get("arguments") or {}
-                task = str(args.get("task") or "").strip()
-                if not task:
-                    return self._error(request_id, -32602, "`task` is required")
                 budget = int(args.get("budget") or 1200)
                 if not Store(self.root).exists():
                     index_repo(self.root)
-                capsule = build_context(self.root, task, [], budget)
+                if name == "edgebase":
+                    task = str(args.get("task") or "").strip()
+                    if not task:
+                        return self._error(request_id, -32602, "`task` is required")
+                    capsule = build_context(self.root, task, [], budget)
+                    text = (
+                        f"{capsule.markdown}\n\n"
+                        "Use this Edgebase context as the first read set before broad exploration or edits."
+                    )
+                    description = "Edgebase source-backed context capsule."
+                elif name == "goal":
+                    goal = str(args.get("goal") or args.get("task") or "").strip()
+                    if not goal:
+                        return self._error(request_id, -32602, "`goal` is required")
+                    capsule = build_goal_capsule(self.root, goal, [], budget)
+                    text = (
+                        f"{capsule.markdown}\n\n"
+                        "Use this Goal Capsule as the executable work contract before editing."
+                    )
+                    description = "Edgebase executable Goal Capsule."
+                else:
+                    return self._error(request_id, -32602, f"Unknown prompt: {name}")
                 return self._result(
                     request_id,
                     {
-                        "description": "Edgebase source-backed context capsule.",
+                        "description": description,
                         "messages": [
                             {
                                 "role": "user",
                                 "content": {
                                     "type": "text",
-                                    "text": (
-                                        f"{capsule.markdown}\n\n"
-                                        "Use this Edgebase context as the first read set before broad exploration or edits."
-                                    ),
+                                    "text": text,
                                 },
                             }
                         ],
@@ -129,27 +192,39 @@ class McpServer:
                 params = request.get("params") or {}
                 name = params.get("name")
                 args = params.get("arguments") or {}
-                if name != TOOL_NAME:
-                    return self._error(request_id, -32602, f"Unknown tool: {name}")
-                task = str(args.get("task") or "").strip()
-                if not task:
-                    return self._error(request_id, -32602, "`task` is required")
                 budget = int(args.get("budget") or 1200)
                 changed_files = [str(p) for p in args.get("changed_files") or []]
                 if not Store(self.root).exists():
                     index_repo(self.root)
-                capsule = build_context(self.root, task, changed_files, budget)
-                return self._result(
-                    request_id,
-                    {
-                        "content": [{"type": "text", "text": capsule.markdown}],
-                        "structuredContent": {
-                            "selected_files": list(capsule.selected_files),
-                            "token_estimate": capsule.token_estimate,
-                            "stale_files": list(capsule.stale_files),
+                if name == TOOL_NAME:
+                    task = str(args.get("task") or "").strip()
+                    if not task:
+                        return self._error(request_id, -32602, "`task` is required")
+                    capsule = build_context(self.root, task, changed_files, budget)
+                    return self._result(
+                        request_id,
+                        {
+                            "content": [{"type": "text", "text": capsule.markdown}],
+                            "structuredContent": {
+                                "selected_files": list(capsule.selected_files),
+                                "token_estimate": capsule.token_estimate,
+                                "stale_files": list(capsule.stale_files),
+                            },
                         },
-                    },
-                )
+                    )
+                if name == GOAL_TOOL_NAME:
+                    goal = str(args.get("goal") or args.get("task") or "").strip()
+                    if not goal:
+                        return self._error(request_id, -32602, "`goal` is required")
+                    capsule = build_goal_capsule(self.root, goal, changed_files, budget)
+                    return self._result(
+                        request_id,
+                        {
+                            "content": [{"type": "text", "text": capsule.markdown}],
+                            "structuredContent": capsule.contract.to_dict(),
+                        },
+                    )
+                return self._error(request_id, -32602, f"Unknown tool: {name}")
             return self._error(request_id, -32601, f"Method not found: {method}")
         except Exception as exc:  # MCP servers should return JSON-RPC errors, not crash.
             return self._error(request_id, -32603, str(exc))

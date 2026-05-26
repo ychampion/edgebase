@@ -17,6 +17,8 @@ AGENT_DOC_START = "<!-- EDGEBASE:START -->"
 AGENT_DOC_END = "<!-- EDGEBASE:END -->"
 CLAUDE_SKILL_START = "<!-- EDGEBASE:CLAUDE-SKILL:START -->"
 CLAUDE_SKILL_END = "<!-- EDGEBASE:CLAUDE-SKILL:END -->"
+CLAUDE_GOAL_SKILL_START = "<!-- EDGEBASE:CLAUDE-GOAL-SKILL:START -->"
+CLAUDE_GOAL_SKILL_END = "<!-- EDGEBASE:CLAUDE-GOAL-SKILL:END -->"
 
 
 @dataclass(frozen=True)
@@ -169,15 +171,18 @@ def agent_docs_block() -> str:
         "## Edgebase Context\n\n"
         "Edgebase is enabled for this repository. Use the injected Edgebase context when it is present. "
         "When no injected context is present and the task needs broad code exploration or edits, call the MCP tool "
-        "`edgebase_context` with the task and any changed files before reading many files. Do not wait for the user "
+        "`edgebase_context` with the task and any changed files before reading many files. For implementation goals, "
+        "call `edgebase_goal` to get a Goal Capsule and Work Contract before editing. Do not wait for the user "
         "to request Edgebase explicitly.\n\n"
         "Fallback when MCP tools and automatic hooks are unavailable:\n\n"
         "```bash\n"
         "edgebase context \"<task>\" --budget 1200\n"
+        "edgebase goal \"<goal>\" --budget 1200\n"
         "```\n\n"
         "Keep static instructions here minimal; Edgebase supplies fresh structure, symbols, tests, owners, "
         "and change-hotspot context from the local git working tree. Claude Code receives automatic prompt-time "
-        "context through hooks when hooks are installed, and also exposes `/edgebase <task>` as a project skill. "
+        "context through hooks when hooks are installed, and also exposes `/edgebase <task>` and `/goal <goal>` "
+        "as project skills. "
         "Refresh manually with `edgebase index --changed` after edits, or disable with "
         "`edgebase disable --scope both`.\n"
         f"{AGENT_DOC_END}\n"
@@ -219,6 +224,14 @@ def setup_claude(
             )
         else:
             results.append(SetupResult(skill_path, "updated", "Claude Code project skill /edgebase"))
+        try:
+            goal_skill_path = install_claude_goal_skill(repo_root, command)
+        except RuntimeError as exc:
+            results.append(
+                SetupResult(repo_root / ".claude" / "skills" / "goal" / "SKILL.md", "skipped", str(exc))
+            )
+        else:
+            results.append(SetupResult(goal_skill_path, "updated", "Claude Code project skill /goal"))
         if install_hooks:
             hooks_path = install_claude_hooks(repo_root)
             results.append(SetupResult(hooks_path, "updated", "Claude Code automatic prompt and freshness hooks"))
@@ -266,6 +279,41 @@ def claude_skill_content(repo_root: Path, command: str | None) -> str:
         "If `$ARGUMENTS` is empty, infer the task from the current user request. Prefer the MCP tool "
         "`edgebase_context` when it is available; otherwise run the command above.\n"
         f"{CLAUDE_SKILL_END}\n"
+    )
+
+
+def install_claude_goal_skill(repo_root: Path, command: str | None) -> Path:
+    skill_path = repo_root / ".claude" / "skills" / "goal" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True, exist_ok=True)
+    if skill_path.exists():
+        existing = skill_path.read_text(encoding="utf-8")
+        if CLAUDE_GOAL_SKILL_START not in existing:
+            raise RuntimeError(f"Refusing to overwrite existing Claude skill without Edgebase marker: {skill_path}")
+    skill_path.write_text(claude_goal_skill_content(repo_root, command), encoding="utf-8")
+    return skill_path
+
+
+def claude_goal_skill_content(repo_root: Path, command: str | None) -> str:
+    executable, prefix = command_parts(command)
+    command_prefix = " ".join(
+        shlex.quote(part)
+        for part in [executable, *prefix, "--root", str(repo_root), "goal"]
+    )
+    return (
+        f"{CLAUDE_GOAL_SKILL_START}\n"
+        "---\n"
+        "name: goal\n"
+        "description: Create an executable Edgebase Goal Capsule and Work Contract before editing.\n"
+        "argument-hint: \"<coding goal>\"\n"
+        "---\n\n"
+        "# Goal\n\n"
+        "Fetch a Goal Capsule for the current objective and use its Work Contract before write/edit tools.\n\n"
+        "```bash\n"
+        f"{command_prefix} \"$ARGUMENTS\" --budget 1200\n"
+        "```\n\n"
+        "If `$ARGUMENTS` is empty, infer the goal from the current user request. Prefer the MCP tool "
+        "`edgebase_goal` when it is available; otherwise run the command above.\n"
+        f"{CLAUDE_GOAL_SKILL_END}\n"
     )
 
 
@@ -448,6 +496,8 @@ def disable_claude(repo_root: Path, scope: str, remove_hooks: bool) -> list[Setu
         results.append(SetupResult(path, action, "Claude Code project MCP server removed"))
         skill_path = uninstall_claude_skill(repo_root)
         results.append(SetupResult(skill_path, "updated", "removed Claude Code project skill /edgebase"))
+        goal_skill_path = uninstall_claude_goal_skill(repo_root)
+        results.append(SetupResult(goal_skill_path, "updated", "removed Claude Code project skill /goal"))
         if remove_hooks:
             hooks_path = uninstall_claude_hooks(repo_root)
             results.append(SetupResult(hooks_path, "updated", "removed Claude Code freshness hooks"))
@@ -468,6 +518,22 @@ def uninstall_claude_skill(repo_root: Path) -> Path:
         return skill_path
     existing = skill_path.read_text(encoding="utf-8")
     if CLAUDE_SKILL_START not in existing:
+        return skill_path
+    skill_path.unlink()
+    for parent in (skill_path.parent, skill_path.parent.parent):
+        try:
+            parent.rmdir()
+        except OSError:
+            break
+    return skill_path
+
+
+def uninstall_claude_goal_skill(repo_root: Path) -> Path:
+    skill_path = repo_root / ".claude" / "skills" / "goal" / "SKILL.md"
+    if not skill_path.exists():
+        return skill_path
+    existing = skill_path.read_text(encoding="utf-8")
+    if CLAUDE_GOAL_SKILL_START not in existing:
         return skill_path
     skill_path.unlink()
     for parent in (skill_path.parent, skill_path.parent.parent):

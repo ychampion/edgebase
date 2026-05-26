@@ -17,7 +17,14 @@ from edgebase import __version__
 from edgebase.benchmark import run_external
 from edgebase.context import build_context
 from edgebase.doctor import run_doctor
-from edgebase.hooks import handle_claude_user_prompt_submit, install_claude_hooks, install_git_hook
+from edgebase.goal import build_goal_capsule, build_patch_passport
+from edgebase.hooks import (
+    handle_claude_post_tool_use,
+    handle_claude_pre_tool_use,
+    handle_claude_user_prompt_submit,
+    install_claude_hooks,
+    install_git_hook,
+)
 from edgebase.indexer import index_repo
 from edgebase.mcp import McpServer
 from edgebase.setup import AGENT_DOC_START, disable_repo, setup_repo
@@ -61,6 +68,84 @@ class EdgebaseTests(unittest.TestCase):
             self.assertIn("Machine summary:", capsule.markdown)
             self.assertIn("app/auth.py", capsule.selected_files)
 
+    def test_goal_capsule_markdown_and_contract_schema(self) -> None:
+        with sample_repo() as repo:
+            index_repo(repo)
+            capsule = build_goal_capsule(
+                repo,
+                "Add passwordless login support without breaking existing OAuth",
+                ["app/auth.py"],
+                budget=900,
+            )
+            self.assertIn("# Edgebase Goal Capsule", capsule.markdown)
+            self.assertIn("Current hypothesis:", capsule.markdown)
+            self.assertIn("Patch contract:", capsule.markdown)
+            self.assertIn("app/auth.py", capsule.contract.selected_files)
+            self.assertIn("tests/test_auth.py", capsule.contract.blast_radius)
+            self.assertIn("pytest tests/test_auth.py", capsule.contract.test_plan)
+            self.assertEqual(
+                set(capsule.contract.to_dict()),
+                {
+                    "goal",
+                    "repo_commit",
+                    "worktree_fingerprint",
+                    "selected_files",
+                    "must_read",
+                    "must_not_touch",
+                    "blast_radius",
+                    "test_plan",
+                    "acceptance_criteria",
+                    "risk_flags",
+                    "uncertainties",
+                    "provenance",
+                },
+            )
+
+    def test_goal_cli_json_emits_contract_schema(self) -> None:
+        with sample_repo() as repo:
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "edgebase",
+                    "goal",
+                    "--root",
+                    str(repo),
+                    "modify login",
+                    "--changed-file",
+                    "app/auth.py",
+                    "--json",
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                timeout=10,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            data = json.loads(proc.stdout)
+            self.assertEqual(
+                set(data),
+                {
+                    "goal",
+                    "repo_commit",
+                    "worktree_fingerprint",
+                    "selected_files",
+                    "must_read",
+                    "must_not_touch",
+                    "blast_radius",
+                    "test_plan",
+                    "acceptance_criteria",
+                    "risk_flags",
+                    "uncertainties",
+                    "provenance",
+                },
+            )
+            self.assertEqual(data["goal"], "modify login")
+
     def test_stale_detection_and_incremental_reindex(self) -> None:
         with sample_repo() as repo:
             index_repo(repo)
@@ -78,7 +163,7 @@ class EdgebaseTests(unittest.TestCase):
             self.assertNotIn("app/auth.py", fresh.stale_files)
             self.assertIn("logout", fresh.markdown)
 
-    def test_mcp_exposes_single_context_tool(self) -> None:
+    def test_mcp_exposes_context_and_goal_surfaces(self) -> None:
         with sample_repo() as repo:
             index_repo(repo)
             server = McpServer(repo)
@@ -90,11 +175,11 @@ class EdgebaseTests(unittest.TestCase):
             listed = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
             self.assertIsNotNone(listed)
             tools = listed["result"]["tools"]
-            self.assertEqual([tool["name"] for tool in tools], ["edgebase_context"])
+            self.assertEqual([tool["name"] for tool in tools], ["edgebase_context", "edgebase_goal"])
 
             prompts = server.handle({"jsonrpc": "2.0", "id": 3, "method": "prompts/list"})
             self.assertIsNotNone(prompts)
-            self.assertEqual([prompt["name"] for prompt in prompts["result"]["prompts"]], ["edgebase"])
+            self.assertEqual([prompt["name"] for prompt in prompts["result"]["prompts"]], ["edgebase", "goal"])
 
             called = server.handle(
                 {
@@ -124,6 +209,35 @@ class EdgebaseTests(unittest.TestCase):
             prompt_text = prompt["result"]["messages"][0]["content"]["text"]
             self.assertIn("# Edgebase Context", prompt_text)
             self.assertIn("first read set", prompt_text)
+
+            goal_called = server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 5,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "edgebase_goal",
+                        "arguments": {"goal": "modify login", "changed_files": ["app/auth.py"]},
+                    },
+                }
+            )
+            self.assertIsNotNone(goal_called)
+            goal_text = goal_called["result"]["content"][0]["text"]
+            self.assertIn("# Edgebase Goal Capsule", goal_text)
+            self.assertIn("app/auth.py", goal_called["result"]["structuredContent"]["selected_files"])
+
+            goal_prompt = server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 6,
+                    "method": "prompts/get",
+                    "params": {"name": "goal", "arguments": {"goal": "modify login"}},
+                }
+            )
+            self.assertIsNotNone(goal_prompt)
+            goal_prompt_text = goal_prompt["result"]["messages"][0]["content"]["text"]
+            self.assertIn("# Edgebase Goal Capsule", goal_prompt_text)
+            self.assertIn("executable work contract", goal_prompt_text)
 
     def test_mcp_cli_accepts_root_after_subcommand(self) -> None:
         with sample_repo() as repo:
@@ -174,6 +288,10 @@ class EdgebaseTests(unittest.TestCase):
             self.assertIn("name: edgebase", skill)
             self.assertIn("argument-hint", skill)
 
+            goal_skill = (repo / ".claude" / "skills" / "goal" / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn("name: goal", goal_skill)
+            self.assertIn("edgebase_goal", goal_skill)
+
             cursor = json.loads((repo / ".cursor" / "mcp.json").read_text(encoding="utf-8"))
             self.assertIn("edgebase", cursor["mcpServers"])
 
@@ -217,6 +335,7 @@ class EdgebaseTests(unittest.TestCase):
             claude_hooks = json.loads((repo / ".claude" / "settings.json").read_text(encoding="utf-8"))
             self.assertNotIn("hooks", claude_hooks)
             self.assertFalse((repo / ".claude" / "skills" / "edgebase" / "SKILL.md").exists())
+            self.assertFalse((repo / ".claude" / "skills" / "goal" / "SKILL.md").exists())
 
     def test_claude_prompt_hook_injects_context_for_coding_prompts(self) -> None:
         with sample_repo() as repo:
@@ -229,9 +348,11 @@ class EdgebaseTests(unittest.TestCase):
             )
             settings = json.loads((repo / ".claude" / "settings.json").read_text(encoding="utf-8"))
             self.assertIn("UserPromptSubmit", settings["hooks"])
+            self.assertIn("PreToolUse", settings["hooks"])
             checks = {check.name: check for check in run_doctor(repo, agents=["claude"], scope="project")}
             self.assertEqual(checks["Claude Code hooks"].status, "ok")
             self.assertEqual(checks["Claude Code /edgebase skill"].status, "ok")
+            self.assertEqual(checks["Claude Code /goal skill"].status, "ok")
 
             old_stdin = sys.stdin
             stdout = io.StringIO()
@@ -247,6 +368,78 @@ class EdgebaseTests(unittest.TestCase):
             self.assertEqual(output["hookEventName"], "UserPromptSubmit")
             self.assertIn("# Edgebase Context", output["additionalContext"])
             self.assertIn("app/auth.py", output["additionalContext"])
+
+    def test_claude_pre_tool_hook_injects_work_contract(self) -> None:
+        with sample_repo() as repo:
+            index_repo(repo)
+            old_stdin = sys.stdin
+            stdout = io.StringIO()
+            try:
+                sys.stdin = io.StringIO(
+                    json.dumps(
+                        {
+                            "goal": "modify login",
+                            "tool_input": {"file_path": str(repo / "app" / "auth.py")},
+                        }
+                    )
+                )
+                with contextlib.redirect_stdout(stdout):
+                    code = handle_claude_pre_tool_use(repo)
+            finally:
+                sys.stdin = old_stdin
+            self.assertEqual(code, 0)
+            data = json.loads(stdout.getvalue())
+            output = data["hookSpecificOutput"]
+            self.assertEqual(output["hookEventName"], "PreToolUse")
+            self.assertIn("# Edgebase Work Contract", output["additionalContext"])
+            self.assertIn("app/auth.py", output["additionalContext"])
+
+    def test_claude_post_tool_hook_emits_edit_delta(self) -> None:
+        with sample_repo() as repo:
+            index_repo(repo)
+            auth_path = repo / "app" / "auth.py"
+            auth_path.write_text(
+                auth_path.read_text(encoding="utf-8") + "\ndef magic_link() -> str:\n    return 'token'\n",
+                encoding="utf-8",
+            )
+            old_stdin = sys.stdin
+            stdout = io.StringIO()
+            try:
+                sys.stdin = io.StringIO(
+                    json.dumps(
+                        {
+                            "goal": "modify login",
+                            "tool_input": {"file_path": str(auth_path)},
+                        }
+                    )
+                )
+                with contextlib.redirect_stdout(stdout):
+                    code = handle_claude_post_tool_use(repo)
+            finally:
+                sys.stdin = old_stdin
+            self.assertEqual(code, 0)
+            data = json.loads(stdout.getvalue())
+            output = data["hookSpecificOutput"]
+            self.assertEqual(output["hookEventName"], "PostToolUse")
+            self.assertIn("# Edgebase Edit Delta", output["additionalContext"])
+            self.assertIn("tests/test_auth.py", output["additionalContext"])
+
+    def test_patch_passport_records_explicit_tests_only(self) -> None:
+        with sample_repo() as repo:
+            index_repo(repo)
+            no_tests = build_patch_passport(repo, "modify login", [], ["app/auth.py"])
+            self.assertIn("# Patch Passport", no_tests.markdown)
+            self.assertIn("No tests recorded by Edgebase.", no_tests.markdown)
+            self.assertIn("Required checks not recorded:", no_tests.markdown)
+
+            with_tests = build_patch_passport(
+                repo,
+                "modify login",
+                ["python3 -m unittest -v: pass"],
+                ["app/auth.py"],
+            )
+            self.assertIn("python3 -m unittest -v [pass]", with_tests.markdown)
+            self.assertNotIn("No tests recorded by Edgebase.", with_tests.markdown)
 
     def test_hook_commands_shell_quote_repo_paths(self) -> None:
         with tempfile.TemporaryDirectory(prefix="edgebase quote ' ") as tmp:

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .git import find_repo_root
 from .indexer import index_repo
-from .setup import CLAUDE_SKILL_START, normalize_agents
+from .setup import CLAUDE_GOAL_SKILL_START, CLAUDE_SKILL_START, normalize_agents
 from .store import Store
 
 
@@ -85,9 +85,11 @@ def mcp_stdio_check(repo_root: Path) -> Check:
         result = response.get("result") if isinstance(response, dict) else None
         if isinstance(result, dict) and isinstance(result.get("tools"), list):
             tools = result["tools"]
-    if any(tool.get("name") == "edgebase_context" for tool in tools if isinstance(tool, dict)):
-        return Check("mcp-stdio", "ok", "edgebase_context listed")
-    return Check("mcp-stdio", "fail", "edgebase_context missing from tools/list")
+    tool_names = {str(tool.get("name")) for tool in tools if isinstance(tool, dict)}
+    missing = {"edgebase_context", "edgebase_goal"} - tool_names
+    if not missing:
+        return Check("mcp-stdio", "ok", "edgebase_context and edgebase_goal listed")
+    return Check("mcp-stdio", "fail", "missing from tools/list: " + ", ".join(sorted(missing)))
 
 
 def agent_config_checks(repo_root: Path, agents: set[str], scope: str) -> list[Check]:
@@ -100,6 +102,13 @@ def agent_config_checks(repo_root: Path, agents: set[str], scope: str) -> list[C
                 repo_root / ".claude" / "skills" / "edgebase" / "SKILL.md",
                 CLAUDE_SKILL_START,
                 "Claude Code /edgebase skill",
+            )
+        )
+        checks.append(
+            text_contains_check(
+                repo_root / ".claude" / "skills" / "goal" / "SKILL.md",
+                CLAUDE_GOAL_SKILL_START,
+                "Claude Code /goal skill",
             )
         )
     if "codex" in agents and scope in {"project", "both"}:
@@ -169,7 +178,12 @@ def claude_hooks_check(path: Path) -> Check:
     rendered = json.dumps(hooks) if isinstance(hooks, dict) else ""
     missing = [
         name
-        for name in ("claude-user-prompt-submit", "claude-session-start", "claude-post-tool-use")
+        for name in (
+            "claude-user-prompt-submit",
+            "claude-session-start",
+            "claude-pre-tool-use",
+            "claude-post-tool-use",
+        )
         if name not in rendered
     ]
     if missing:
