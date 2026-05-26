@@ -1,8 +1,32 @@
+<p align="center">
+  <img src="assets/edgebase-logo.svg" alt="Edgebase" width="620">
+</p>
+
+<p align="center">
+  <strong>Git-native preflight context for coding agents.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/ychampion/edgebase/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ychampion/edgebase/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/ychampion/edgebase/releases"><img alt="Release" src="https://img.shields.io/github/v/release/ychampion/edgebase?display_name=tag"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/ychampion/edgebase"></a>
+  <a href="https://github.com/ychampion/edgebase"><img alt="Local-first" src="https://img.shields.io/badge/local--first-no%20cloud%20required-1237b7"></a>
+</p>
+
 # Edgebase
 
-Edgebase is a local, git-native work-contract layer for coding agents.
+Edgebase is a local, git-native preflight layer for coding agents. It records a small, source-backed Goal Capsule before an agent edits, keeps `AGENTS.md` minimal, and serves fresh context through MCP and agent hooks.
 
-Its flagship feature is **Goal Capsules**: short, executable briefs that tell Codex, Claude Code, Continue-style agents, and human reviewers what to read, what not to touch yet, what tests matter, and what evidence the final patch must include.
+Its flagship feature is **Goal Capsules**: short, executable briefs that tell Codex, Claude Code, Cursor-style agents, and human reviewers what to read, what not to touch yet, what tests matter, and what evidence the final patch must include.
+
+## What It Does
+
+- Records a Goal Capsule before coding agents plan or edit.
+- Blocks broad edits when the capsule is missing or stale.
+- Refreshes the graph after edits, commits, and MCP calls.
+- Keeps generated structure out of `AGENTS.md`.
+- Runs locally with no Docker, cloud service, graph database, or API key.
+- Preserves provenance for every edge: path, line, extractor, confidence, commit, and freshness.
 
 ```bash
 python3 -m edgebase goal "Add passwordless login support without breaking existing OAuth"
@@ -63,7 +87,7 @@ With Goal Capsules, Edgebase also answers:
 
 > What is the executable contract for this goal, and what evidence must the patch return?
 
-## Why This Exists
+## Why This Matters
 
 Modern coding agents are good at exploring code, but their default exploration loop is wasteful:
 
@@ -233,7 +257,7 @@ Automation layers:
 This is not a separate graph UI or a new agent control surface; visualization is kept as a local artifact attached to the existing agent context flow.
 
 See [Architecture](docs/ARCHITECTURE.md) and [Validation](docs/VALIDATION.md).
-The release audit for `v0.1.3` is documented in [Release Audit](docs/RELEASE_AUDIT_0.1.3.md).
+The latest release audit is documented in [Release Audit](docs/RELEASE_AUDIT_0.1.5.md).
 
 ## Benchmarks
 

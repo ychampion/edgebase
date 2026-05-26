@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.1.5 - 2026-05-26
+
+### Added
+
+- Edgebase logo and mark assets under `assets/`.
+- GitHub Actions CI for Python 3.10 and 3.12.
+- GitHub issue templates and pull request template.
+- Launch post draft in `docs/LAUNCH_POST.md`.
+
+### Changed
+
+- README first screen now uses the logo, badges, a clearer product promise, and a concise "What It Does" section.
+- Package description now matches the product positioning: git-native preflight context for coding agents.
+
 ## 0.1.4 - 2026-05-26
 
 ### Changed

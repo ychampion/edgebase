@@ -18,7 +18,8 @@ Edgebase may write:
 - agent MCP config files
 - a marker-bounded `AGENTS.md` block
 - `.git/hooks/post-commit`
-- Claude Code hook entries
+- Claude Code and Codex hook entries
+- project skills under `.claude/skills/` or `.agents/skills/`
 
 Use `python3 -m edgebase disable --scope both` to remove or disable generated integrations.
 

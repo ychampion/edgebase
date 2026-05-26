@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="220" viewBox="0 0 220 220" role="img" aria-labelledby="title desc">
+  <title id="title">Edgebase mark</title>
+  <desc id="desc">A geometric blue E mark for Edgebase.</desc>
+  <defs>
+    <linearGradient id="edgebase-blue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2f6bff"/>
+      <stop offset="1" stop-color="#1237b7"/>
+    </linearGradient>
+    <linearGradient id="edgebase-navy" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#14224c"/>
+      <stop offset="1" stop-color="#060b1f"/>
+    </linearGradient>
+  </defs>
+  <rect width="220" height="220" rx="48" fill="#f8fbff"/>
+  <g transform="translate(42 30)">
+    <path d="M36 48 102 10v26L36 74Z" fill="url(#edgebase-blue)"/>
+    <path d="M36 95 126 43v27L36 122Z" fill="url(#edgebase-blue)"/>
+    <path d="M36 48v74l66 38v-27L58 108V61Z" fill="url(#edgebase-navy)"/>
+    <path d="M58 108 126 70v27l-46 27Z" fill="#0e1b44"/>
+    <path d="M36 122 102 160l46-27-22-13-24 14-44-26Z" fill="#102053"/>
+    <path d="M36 48 14 61v74l22-13Z" fill="#09122e"/>
+  </g>
+</svg>

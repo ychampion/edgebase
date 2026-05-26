@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "edgebase"
-version = "0.1.4"
-description = "Git-native, provenance-backed context capsules for coding agents."
+version = "0.1.5"
+description = "Git-native preflight context for coding agents."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
