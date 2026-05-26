@@ -27,12 +27,15 @@ Explicit commands are available when a client exposes project skills or MCP prom
 ```text
 /edgebase "what should I read before this change?"
 /edgebase-goal "ship this feature without breaking the nearby tests"
+/edgebase-radius "src/billing/subscription.ts" --goal "change subscription renewal behavior"
 /edgebase-checkpoint "handoff before context compaction"
 /edgebase-preflight-status
 /edgebase-index --changed
 ```
 
 The goal is narrow: reduce wasted search/read calls without lowering patch quality.
+
+The new radius command is intentionally advisory. It says "this route, migration path, test folder, downstream module, or provider side effect may be affected," not "edit all of these files."
 
 Repo: https://github.com/ychampion/edgebase
 

@@ -38,6 +38,7 @@ Record:
 - wall time
 - selected files
 - work contract blast radius and required checks
+- advisory change radius categories, confidence, and side-effect risks
 - stale-context incidents
 - false dependency edges found by review
 - whether the paired agent patch succeeded
@@ -53,6 +54,7 @@ python3 -m compileall -q src tests
 python3 -m edgebase setup --scope project --agents claude,codex,cursor,gemini,opencode
 python3 -m edgebase doctor --scope project --agents claude,codex,cursor,gemini,opencode
 python3 -m edgebase goal "change login hashing behavior" --changed-file tests/test_edgebase.py --json
+python3 -m edgebase radius tests/test_edgebase.py --goal "change login hashing behavior" --json
 python3 -m edgebase preflight refresh "change login hashing behavior" --changed-file tests/test_edgebase.py --json
 python3 -m edgebase preflight status --json
 python3 -m edgebase passport "change login hashing behavior" --test "python3 -m unittest -v: pass"

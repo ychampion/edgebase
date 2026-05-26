@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.1.8 - 2026-05-26
+
+### Added
+
+- Advisory Change Blast Radius via `edgebase radius`, `edgebase_radius`, and `/edgebase-radius`.
+- Goal Capsules now include a non-blocking Change Blast Radius section when a target file is known.
+- Radius findings classify likely API routes, DB migration paths, focused tests, downstream modules, and side-effect risks with confidence and source.
+
+### Changed
+
+- Planning guidance now treats blast radius as an impact map, not an instruction to edit every listed path.
+
 ## 0.1.7 - 2026-05-26
 
 ### Added

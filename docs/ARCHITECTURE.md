@@ -115,6 +115,18 @@ The returned capsule includes:
 
 `edgebase checkpoint`, `edgebase fork-plan`, and `edgebase resume` preserve compact context across compaction, handoff, and git worktree branching. They reuse the context ranker rather than adding a separate memory store.
 
+## Change Blast Radius
+
+`edgebase_radius`, `edgebase radius`, and `/edgebase-radius` return an advisory impact map for a proposed file-level change. The output groups likely affected areas by category:
+
+- API routes or controllers that import or call the target.
+- DB migration paths when the target domain suggests persisted state.
+- focused tests inferred from `TESTS` edges or path/domain overlap.
+- downstream modules such as notifications, invoices, or webhooks.
+- side-effect risks such as payment providers, database shape changes, generated files, or customer notifications.
+
+Radius output is deliberately non-blocking. It is used in planning and Goal Capsules to tell the agent what may need inspection; it must not be treated as a requirement to edit every listed path.
+
 ## Agent Integration Boundary
 
 Edgebase does not try to control agents. It gives them a reliable tool, a small instruction marker, and client-specific automation where the client has documented hooks:
@@ -133,7 +145,7 @@ Claude Code has documented prompt and tool hooks, so Edgebase provides:
 - `SessionEnd`: Patch Passport at session end.
 - project skill `/edgebase <task>` for explicit manual refresh.
 - project skill `/edgebase-goal <goal>` for explicit Goal Capsules, with `/goal <goal>` as a compatibility alias.
-- project skills for operational commands such as `/edgebase-checkpoint`, `/edgebase-resume`, `/edgebase-fork-plan`, `/edgebase-passport`, `/edgebase-preflight-status`, `/edgebase-preflight-refresh`, `/edgebase-index`, `/edgebase-stats`, `/edgebase-doctor`, `/edgebase-setup`, `/edgebase-disable`, and `/edgebase-version`.
+- project skills for operational commands such as `/edgebase-radius`, `/edgebase-checkpoint`, `/edgebase-resume`, `/edgebase-fork-plan`, `/edgebase-passport`, `/edgebase-preflight-status`, `/edgebase-preflight-refresh`, `/edgebase-index`, `/edgebase-stats`, `/edgebase-doctor`, `/edgebase-setup`, `/edgebase-disable`, and `/edgebase-version`.
 
 Codex setup is MCP plus project-scoped hooks and skills. Edgebase writes `.codex/config.toml`, `[features] hooks = true`, `.codex/hooks.json`, `.agents/skills/edgebase`, `.agents/skills/edgebase-goal`, `.agents/skills/goal`, and the same `/edgebase-*` operational command skills. When project hooks are trusted, Codex receives the same preflight gate: prompt-time capsule, stale edit block, post-edit refresh, pre-compact checkpoint, and stop-time Patch Passport.
 

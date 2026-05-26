@@ -8,6 +8,7 @@ from .context import estimate_tokens, rank_files, select_files, stale_files, tok
 from .git import changed_files as git_changed_files
 from .git import current_commit, file_sha, find_repo_root
 from .indexer import index_repo
+from .radius import build_change_radius, render_radius_section
 from .store import Store
 
 
@@ -57,6 +58,20 @@ def build_goal_capsule(
     repo_root = find_repo_root(root)
     contract = build_work_contract(repo_root, goal, changed_files, budget, auto_index)
     markdown = render_goal_capsule(contract)
+    try:
+        radius = build_change_radius(
+            repo_root,
+            changed_files or contract.selected_files[:1],
+            goal=goal,
+            changed_files=changed_files or [],
+            budget=min(budget, 1200),
+            auto_index=auto_index,
+        )
+        radius_section = render_radius_section(radius)
+        if radius_section:
+            markdown = markdown + "\n\n" + radius_section
+    except Exception:
+        pass
     graph_artifacts: dict[str, str] = {}
     try:
         from .graph import write_graph_artifacts

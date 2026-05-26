@@ -23,6 +23,7 @@ Its flagship feature is **Goal Capsules**: short, executable briefs that tell Co
 
 - Records a Goal Capsule before coding agents plan or edit.
 - Blocks broad edits when the capsule is missing or stale.
+- Shows an advisory Change Blast Radius for likely routes, migrations, tests, downstream modules, and side-effect risks.
 - Refreshes the graph after edits, commits, and MCP calls.
 - Keeps generated structure out of `AGENTS.md`.
 - Runs locally with no Docker, cloud service, graph database, or API key.
@@ -61,17 +62,25 @@ Required checks:
 - pytest tests/auth/test_login.py
 - pytest tests/auth/test_oauth.py
 
+Change blast radius (advisory):
+- API route: `src/routes/auth.py` (imports `src/auth/login.py`; confidence=0.80)
+- tests: `tests/auth/test_login.py` (tests `src/auth/login.py`; confidence=0.45)
+- downstream module: `src/auth/oauth.py` (calls exported symbol `login`; confidence=0.55)
+- risk: auth provider side effects if the provider flow changes
+Note: inspect affected areas when behavior reaches them; this does not require editing every listed path.
+
 Patch contract:
 The final PR must include changed files, rationale, tests run, regression evidence, and unresolved assumptions.
 ```
 
-Goal Capsules are backed by the local graph index, git state, inferred tests, provenance, and working-tree freshness. They are recorded automatically by supported hooks, exposed as `/edgebase-goal ...` when a manual command is useful, and called through CLI/MCP before write tools run. `/goal ...` remains installed as a shorter compatibility alias. The same agent-facing paths also refresh optional local graph artifacts at `.edgebase/graphs/latest.html`, `.json`, and `.dot`; agents surface the paths without dumping raw graph data into context.
+Goal Capsules are backed by the local graph index, git state, inferred tests, provenance, and working-tree freshness. They are recorded automatically by supported hooks, exposed as `/edgebase-goal ...` when a manual command is useful, and called through CLI/MCP before write tools run. `/edgebase-radius ...` is the explicit planning command when an agent proposes a file-level plan and needs to see likely affected areas without being forced to edit them. `/goal ...` remains installed as a shorter compatibility alias. The same agent-facing paths also refresh optional local graph artifacts at `.edgebase/graphs/latest.html`, `.json`, and `.dot`; agents surface the paths without dumping raw graph data into context.
 
 Edgebase also keeps `AGENTS.md` small, indexes the repository into a rebuildable SQLite graph, and exposes MCP tools that agents can use before editing:
 
 ```text
 edgebase_context(task, changed_files?, budget?)
 edgebase_goal(goal, changed_files?, budget?)
+edgebase_radius(targets?, goal?, changed_files?, budget?)
 edgebase_checkpoint(message, budget?)
 edgebase_fork_plan(message, from_id?, branch?, path?, allow_dirty?, budget?)
 edgebase_resume(snapshot_id?)
@@ -86,6 +95,10 @@ Edgebase is not a vector database, a Neo4j wrapper, or a generic memory product.
 With Goal Capsules, Edgebase also answers:
 
 > What is the executable contract for this goal, and what evidence must the patch return?
+
+With Change Blast Radius, it also answers:
+
+> If this file changes, what routes, migrations, tests, downstream modules, and side effects should be inspected before editing?
 
 ## Why This Matters
 
@@ -194,6 +207,7 @@ Useful explicit slash commands inside supported agent REPLs/apps:
 ```text
 /edgebase "change the auth login flow"
 /edgebase-goal "add passwordless login without breaking OAuth"
+/edgebase-radius "src/auth/login.py" --goal "add passwordless login without breaking OAuth"
 /edgebase-passport "add passwordless login without breaking OAuth" --test "python3 -m unittest -v: pass"
 /edgebase-preflight-status
 /edgebase-preflight-refresh "add passwordless login without breaking OAuth"
@@ -212,6 +226,7 @@ Shell fallback and server/development commands:
 ```bash
 python3 -m edgebase context "change the auth login flow" --budget 1200
 python3 -m edgebase goal "add passwordless login without breaking OAuth" --budget 1200
+python3 -m edgebase radius src/auth/login.py --goal "add passwordless login without breaking OAuth"
 python3 -m edgebase passport "add passwordless login without breaking OAuth" --test "python3 -m unittest -v: pass"
 python3 -m edgebase preflight status
 python3 -m edgebase checkpoint "handoff after auth refactor"
@@ -237,7 +252,7 @@ Dynamic-language call graphs are confidence-scored. Low-confidence call edges ar
 
 | Agent | Status | Notes |
 | --- | --- | --- |
-| Claude Code | Supported | Project `.mcp.json`; automatic UserPromptSubmit Goal Capsule; PreToolUse stale-capsule block; async PostToolUse refresh; PreCompact checkpoint; SessionEnd Patch Passport; `/edgebase`, `/edgebase-goal`, `/goal`, and `/edgebase-*` project skills |
+| Claude Code | Supported | Project `.mcp.json`; automatic UserPromptSubmit Goal Capsule; PreToolUse stale-capsule block; async PostToolUse refresh; PreCompact checkpoint; SessionEnd Patch Passport; `/edgebase`, `/edgebase-goal`, `/edgebase-radius`, `/goal`, and `/edgebase-*` project skills |
 | Codex | Supported | Project `.codex/config.toml`, `.codex/hooks.json`, `.agents/skills`; global `~/.codex/config.toml` MCP entry for CLI discovery; verify with `codex mcp list` and `python3 -m edgebase doctor` |
 | Cursor | Supported | Project and global `mcp.json`; Cursor says Composer Agent automatically uses relevant MCP tools |
 | Gemini CLI | Supported | Project and global `settings.json` with `mcpServers` |
@@ -275,7 +290,7 @@ Automation layers:
 This is not a separate graph UI or a new agent control surface; visualization is kept as a local artifact attached to the existing agent context flow.
 
 See [Architecture](docs/ARCHITECTURE.md), [Validation](docs/VALIDATION.md), and [Graph Verification](docs/GRAPH_VERIFICATION_0.1.7.md).
-The latest release audit is documented in [Release Audit](docs/RELEASE_AUDIT_0.1.7.md).
+The latest release audit is documented in [Release Audit](docs/RELEASE_AUDIT_0.1.8.md).
 
 ## Benchmarks
 

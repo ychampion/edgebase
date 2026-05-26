@@ -32,6 +32,7 @@ from .hooks import (
 from .indexer import index_repo
 from .mcp import serve
 from .preflight import load_preflight_state, preflight_status, prepare_goal_capsule
+from .radius import build_change_radius
 from .setup import ALL_AGENTS, disable_repo, setup_repo
 from .store import Store
 
@@ -112,6 +113,16 @@ def build_parser() -> argparse.ArgumentParser:
     context_p.add_argument("--budget", type=int, default=1200, help="Approximate token budget.")
     context_p.add_argument("--json", action="store_true", help="Emit JSON with markdown and metadata.")
     context_p.set_defaults(func=cmd_context)
+
+    radius_p = sub.add_parser("radius", help="Return an advisory change blast radius for files or a plan.")
+    add_subcommand_root(radius_p)
+    radius_p.add_argument("target", nargs="*", help="File path(s), or plan text when no path is known yet.")
+    radius_p.add_argument("--goal", default="", help="Plan or coding goal to shape risk labels.")
+    radius_p.add_argument("--changed-file", action="append", default=[], help="Changed file hint.")
+    radius_p.add_argument("--changed", action="store_true", help="Use changed files from `git status` as targets.")
+    radius_p.add_argument("--budget", type=int, default=1200, help="Approximate token budget.")
+    radius_p.add_argument("--json", action="store_true", help="Emit JSON with findings and risks.")
+    radius_p.set_defaults(func=cmd_radius)
 
     goal_p = sub.add_parser("goal", help="Return an executable Goal Capsule and pre-edit Work Contract.")
     add_subcommand_root(goal_p)
@@ -257,12 +268,13 @@ def cmd_init(args: argparse.Namespace) -> int:
                 "# Agent Instructions\n\n"
                 "Keep static instructions minimal. For codebase structure, use slash commands when available:\n\n"
                 "```text\n/edgebase \"<task>\"\n/edgebase-goal \"<goal>\"\n"
-                "/edgebase-checkpoint \"<handoff message>\"\n/edgebase-resume\n"
+                "/edgebase-radius \"<file or plan>\"\n/edgebase-checkpoint \"<handoff message>\"\n/edgebase-resume\n"
                 "/edgebase-preflight-status\n/edgebase-index --changed\n/edgebase-doctor --scope project\n```\n\n"
                 "Fallback commands:\n\n"
-                "```bash\nedgebase context \"<task>\" --budget 1200\n"
-                "edgebase goal \"<goal>\" --budget 1200 --record-preflight\n"
-                "edgebase resume\n```\n",
+                "```bash\npython3 -m edgebase context \"<task>\" --budget 1200\n"
+                "python3 -m edgebase goal \"<goal>\" --budget 1200 --record-preflight\n"
+                "python3 -m edgebase radius \"<file or plan>\" --budget 1200\n"
+                "python3 -m edgebase resume\n```\n",
                 encoding="utf-8",
             )
     print(f"Initialized Edgebase at {root / '.edgebase'}")
@@ -346,6 +358,18 @@ def cmd_context(args: argparse.Namespace) -> int:
         )
     else:
         print(capsule.markdown)
+    return 0
+
+
+def cmd_radius(args: argparse.Namespace) -> int:
+    changed = list(args.changed_file)
+    if args.changed:
+        changed.extend(changed_files(find_repo_root(args.root)))
+    radius = build_change_radius(args.root, list(args.target), args.goal, sorted(set(changed)), args.budget)
+    if args.json:
+        print(json.dumps(radius.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(radius.markdown)
     return 0
 
 

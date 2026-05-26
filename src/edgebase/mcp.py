@@ -12,6 +12,7 @@ from .context_branches import create_checkpoint, create_fork_plan, render_resume
 from .graph import graph_artifact_summary, write_graph_artifacts
 from .indexer import index_repo
 from .preflight import prepare_goal_capsule
+from .radius import build_change_radius
 from .setup import EDGEBASE_SLASH_COMMANDS
 from .store import Store
 
@@ -21,6 +22,7 @@ GOAL_TOOL_NAME = "edgebase_goal"
 CHECKPOINT_TOOL_NAME = "edgebase_checkpoint"
 FORK_PLAN_TOOL_NAME = "edgebase_fork_plan"
 RESUME_TOOL_NAME = "edgebase_resume"
+RADIUS_TOOL_NAME = "edgebase_radius"
 
 
 def append_optional_section(text: str, section: str) -> str:
@@ -121,6 +123,24 @@ def resume_tool_definition() -> dict[str, Any]:
     }
 
 
+def radius_tool_definition() -> dict[str, Any]:
+    return {
+        "name": RADIUS_TOOL_NAME,
+        "title": "Edgebase Change Radius",
+        "description": "Return an advisory change blast radius for proposed files or a plan.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "targets": {"type": "array", "items": {"type": "string"}, "description": "File paths or plan fragments."},
+                "goal": {"type": "string", "description": "Optional proposed plan or coding goal."},
+                "changed_files": {"type": "array", "items": {"type": "string"}},
+                "budget": {"type": "integer", "minimum": 300, "maximum": 8000},
+            },
+            "additionalProperties": False,
+        },
+    }
+
+
 def slash_prompt_definition(spec: Any) -> dict[str, Any]:
     return {
         "name": spec.name,
@@ -161,7 +181,7 @@ class McpServer:
             if method == "ping":
                 return self._result(request_id, {})
             if method == "tools/list":
-                return self._result(request_id, {"tools": [tool_definition(), goal_tool_definition(), checkpoint_tool_definition(), fork_plan_tool_definition(), resume_tool_definition()]})
+                return self._result(request_id, {"tools": [tool_definition(), goal_tool_definition(), radius_tool_definition(), checkpoint_tool_definition(), fork_plan_tool_definition(), resume_tool_definition()]})
             if method == "prompts/list":
                 return self._result(
                     request_id,
@@ -248,6 +268,21 @@ class McpServer:
             structured = capsule.contract.to_dict()
             structured["graph_artifacts"] = capsule.graph_artifacts
             return self._result(request_id, {"content": [{"type": "text", "text": append_optional_section(capsule.markdown, graph_artifact_summary(capsule.graph_artifacts))}], "structuredContent": structured})
+        if name == RADIUS_TOOL_NAME:
+            radius = build_change_radius(
+                self.root,
+                [str(p) for p in args.get("targets") or []],
+                goal=str(args.get("goal") or args.get("task") or ""),
+                changed_files=changed_files,
+                budget=budget,
+            )
+            return self._result(
+                request_id,
+                {
+                    "content": [{"type": "text", "text": radius.markdown}],
+                    "structuredContent": radius.to_dict(),
+                },
+            )
         if name == CHECKPOINT_TOOL_NAME:
             message = str(args.get("message") or "").strip()
             if not message:

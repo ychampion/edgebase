@@ -48,6 +48,14 @@ class SlashCommandSpec:
 
 EDGEBASE_SLASH_COMMANDS = (
     SlashCommandSpec(
+        "edgebase-radius",
+        ("radius",),
+        "Show advisory change blast radius for a file or proposed plan.",
+        '"src/path/file.ts" [--goal "<plan>"]',
+        " $ARGUMENTS --budget 1200",
+        "Map likely affected routes, tests, downstream modules, migration paths, and side-effect risks. Use it while planning; it is advisory and does not require editing every listed path.",
+    ),
+    SlashCommandSpec(
         "edgebase-checkpoint",
         ("checkpoint",),
         "Save an Edgebase context checkpoint for compaction or handoff.",
@@ -302,6 +310,7 @@ def agent_docs_block() -> str:
         "```text\n"
         "/edgebase \"<task>\"\n"
         "/edgebase-goal \"<goal>\"\n"
+        "/edgebase-radius \"<file or plan>\"\n"
         "/edgebase-checkpoint \"<handoff message>\"\n"
         "/edgebase-resume\n"
         "/edgebase-preflight-status\n"
@@ -310,17 +319,18 @@ def agent_docs_block() -> str:
         "```\n\n"
         "Fallback when MCP tools, slash commands, and automatic hooks are unavailable:\n\n"
         "```bash\n"
-        "edgebase context \"<task>\" --budget 1200\n"
-        "edgebase goal \"<goal>\" --budget 1200 --record-preflight\n"
-        "edgebase checkpoint \"<handoff message>\"\n"
-        "edgebase resume\n"
+        "python3 -m edgebase context \"<task>\" --budget 1200\n"
+        "python3 -m edgebase goal \"<goal>\" --budget 1200 --record-preflight\n"
+        "python3 -m edgebase radius \"<file or plan>\" --budget 1200\n"
+        "python3 -m edgebase checkpoint \"<handoff message>\"\n"
+        "python3 -m edgebase resume\n"
         "```\n\n"
         "Keep static instructions here minimal; Edgebase supplies fresh structure, symbols, tests, owners, "
         "and change-hotspot context from the local git working tree. Local checkpoint and patch-passport files are "
         "saved under `.edgebase/` for compaction and session-end recovery. Hooks and MCP calls may update local graph "
         "artifacts under `.edgebase/graphs/latest.*`; use surfaced artifact paths when a visual relationship view helps, "
         "but do not paste raw graph dumps into agent context. Turn the gate off with `EDGEBASE_PREFLIGHT=off` for an "
-        "emergency session, or remove integrations with `edgebase disable --scope both`.\n"
+        "emergency session, or remove integrations with `python3 -m edgebase disable --scope both`.\n"
         f"{AGENT_DOC_END}\n"
     )
 

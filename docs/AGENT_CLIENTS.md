@@ -1,10 +1,11 @@
 # Agent Client Setup
 
-Edgebase is a local stdio MCP server plus project-scoped hook/skill setup for clients that support it. It exposes five agent-facing MCP tools:
+Edgebase is a local stdio MCP server plus project-scoped hook/skill setup for clients that support it. It exposes six agent-facing MCP tools:
 
 ```text
 edgebase_context(task, changed_files?, budget?)
 edgebase_goal(goal, changed_files?, budget?)
+edgebase_radius(targets?, goal?, changed_files?, budget?)
 edgebase_checkpoint(message, budget?)
 edgebase_fork_plan(message, from_id?, branch?, path?, allow_dirty?, budget?)
 edgebase_resume(snapshot_id?)
@@ -49,6 +50,7 @@ Default state after setup: **on** for selected agents. In Claude Code, Codex, an
 ```text
 /edgebase "implement password reset"
 /edgebase-goal "implement password reset without regressing login"
+/edgebase-radius "src/auth/login.py" --goal "implement password reset"
 /edgebase-preflight-status
 /edgebase-checkpoint "handoff after password reset"
 /edgebase-doctor --scope both
@@ -82,7 +84,7 @@ Setup writes or updates only local configuration files:
 - `.claude/settings.json`: Claude Code SessionStart, UserPromptSubmit, PreToolUse, async PostToolUse, PreCompact, and SessionEnd hooks.
 - `.claude/skills/edgebase/SKILL.md`: Claude Code project skill exposed as `/edgebase <task>`.
 - `.claude/skills/edgebase-goal/SKILL.md`: Claude Code project skill exposed as `/edgebase-goal <goal>`.
-- `.claude/skills/edgebase-*/SKILL.md`: Claude Code project skills exposed as `/edgebase-*` operational commands such as `/edgebase-checkpoint`, `/edgebase-preflight-status`, `/edgebase-index`, and `/edgebase-doctor`.
+- `.claude/skills/edgebase-*/SKILL.md`: Claude Code project skills exposed as `/edgebase-*` operational commands such as `/edgebase-radius`, `/edgebase-checkpoint`, `/edgebase-preflight-status`, `/edgebase-index`, and `/edgebase-doctor`.
 - `.claude/skills/goal/SKILL.md`: Claude Code compatibility skill exposed as `/goal <goal>`.
 - `.codex/config.toml` and/or `~/.codex/config.toml`: Codex MCP server plus project `[features] hooks = true`.
 - `.codex/hooks.json`: Codex project hook commands for the preflight gate.
@@ -129,6 +131,7 @@ It also writes project skills:
 /edgebase <task>
 /edgebase-goal <goal>
 /goal <goal>
+/edgebase-radius <file-or-plan> [--goal "<plan>"]
 /edgebase-checkpoint <message>
 /edgebase-resume [snapshot id]
 /edgebase-fork-plan <objective>
@@ -143,7 +146,7 @@ It also writes project skills:
 /edgebase-version
 ```
 
-Use `/edgebase` when you want a compact read set. Use `/edgebase-goal` when you want an executable Goal Capsule with blast radius, protected areas, required checks, and a patch contract. Use the `/edgebase-*` commands for ordinary checkpoint, resume, preflight, index, doctor, setup, disable, and version tasks from inside the agent. `/goal` is kept as a shorter compatibility alias. Normal coding prompts do not need the phrase "Use edgebase_context"; the prompt hook records and supplies the Goal Capsule automatically when the prompt looks like implementation, debugging, review, or investigation work.
+Use `/edgebase` when you want a compact read set. Use `/edgebase-goal` when you want an executable Goal Capsule with blast radius, protected areas, required checks, and a patch contract. Use `/edgebase-radius` when a plan names a file and you want likely affected routes, migration paths, tests, downstream modules, and side-effect risks before editing. Radius output is advisory; it tells the agent what may need inspection, not what must be changed. Use the other `/edgebase-*` commands for ordinary checkpoint, resume, preflight, index, doctor, setup, disable, and version tasks from inside the agent. `/goal` is kept as a shorter compatibility alias. Normal coding prompts do not need the phrase "Use edgebase_context"; the prompt hook records and supplies the Goal Capsule automatically when the prompt looks like implementation, debugging, review, or investigation work.
 
 Hook and MCP responses may include `.edgebase/graphs/latest.*` paths. Treat them as local visual aids for relationship inspection; do not paste raw graph JSON or DOT back into agent context.
 
@@ -193,6 +196,7 @@ And project skills:
 /edgebase <task>
 /edgebase-goal <goal>
 /goal <goal>
+/edgebase-radius <file-or-plan> [--goal "<plan>"]
 /edgebase-checkpoint <message>
 /edgebase-resume [snapshot id]
 /edgebase-fork-plan <objective>
@@ -283,6 +287,7 @@ Inside Claude Code, Codex, or any client that exposes project skills or MCP prom
 ```text
 /edgebase "implement password reset"
 /edgebase-goal "implement password reset without regressing login"
+/edgebase-radius "src/auth/login.py" --goal "implement password reset"
 /edgebase-passport "implement password reset without regressing login" --test "python3 -m unittest -v: pass"
 /edgebase-preflight-status
 /edgebase-preflight-refresh "implement password reset without regressing login"
@@ -297,6 +302,7 @@ When slash commands and MCP are unavailable, use the console script fallback:
 ```bash
 python3 -m edgebase context "implement password reset" --changed-file src/auth.py --budget 1200
 python3 -m edgebase goal "implement password reset without regressing login" --changed-file src/auth.py --budget 1200
+python3 -m edgebase radius src/auth.py --goal "implement password reset without regressing login"
 python3 -m edgebase passport "implement password reset without regressing login" --test "python3 -m unittest -v: pass"
 python3 -m edgebase preflight status
 python3 -m edgebase preflight refresh "implement password reset without regressing login"

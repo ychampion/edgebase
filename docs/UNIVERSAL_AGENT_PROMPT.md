@@ -87,6 +87,7 @@ Explicit slash commands are available in Claude Code, Codex, and clients that ex
 ```text
 /edgebase "implement password reset"
 /edgebase-goal "implement password reset without regressing login"
+/edgebase-radius "src/auth/login.py" --goal "implement password reset"
 /edgebase-passport "implement password reset without regressing login" --test "python3 -m unittest -v: pass"
 /edgebase-preflight-status
 /edgebase-preflight-refresh "implement password reset without regressing login"

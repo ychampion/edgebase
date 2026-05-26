@@ -19,6 +19,7 @@ from edgebase.context import build_context
 from edgebase.doctor import run_doctor
 from edgebase.goal import build_goal_capsule, build_patch_passport
 from edgebase.preflight import load_preflight_state, preflight_status
+from edgebase.radius import build_change_radius
 from edgebase.graph import build_graph_export, render_dot, render_html, render_json, write_graph_artifacts
 from edgebase.hooks import (
     handle_claude_post_tool_use,
@@ -104,6 +105,79 @@ class EdgebaseTests(unittest.TestCase):
                     "provenance",
                 },
             )
+
+    def test_change_radius_classifies_routes_tests_migrations_and_risks(self) -> None:
+        with billing_repo() as repo:
+            index_repo(repo)
+            radius = build_change_radius(
+                repo,
+                ["src/billing/subscription.ts"],
+                goal="change paid subscription renewal behavior",
+                budget=900,
+            )
+            self.assertIn("# Edgebase Change Blast Radius", radius.markdown)
+            self.assertIn("Changing `src/billing/subscription.ts` likely affects:", radius.markdown)
+            self.assertIn("API route: `src/routes/billing.ts`", radius.markdown)
+            self.assertIn("tests: `tests/billing/subscription.test.ts`", radius.markdown)
+            self.assertIn("downstream module: `src/notifications/invoices.ts`", radius.markdown)
+            self.assertIn("DB migration path: `migrations/*`", radius.markdown)
+            self.assertIn("risk: payment provider side effects", radius.markdown)
+            self.assertIn("Advisory: this is an impact map, not an edit requirement.", radius.markdown)
+            categories = {(finding.category, finding.path) for finding in radius.findings}
+            self.assertIn(("API route", "src/routes/billing.ts"), categories)
+            self.assertIn(("tests", "tests/billing/subscription.test.ts"), categories)
+            self.assertIn(("downstream module", "src/notifications/invoices.ts"), categories)
+
+    def test_radius_cli_and_mcp_return_advisory_surface(self) -> None:
+        with billing_repo() as repo:
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "edgebase",
+                    "radius",
+                    "--root",
+                    str(repo),
+                    "src/billing/subscription.ts",
+                    "--goal",
+                    "change paid subscription renewal behavior",
+                    "--json",
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                timeout=10,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertIn("src/billing/subscription.ts", payload["target_files"])
+            self.assertIn("payment provider side effects", payload["risks"])
+
+            server = McpServer(repo)
+            tools = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+            self.assertIn("edgebase_radius", [tool["name"] for tool in tools["result"]["tools"]])
+            called = server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "edgebase_radius",
+                        "arguments": {
+                            "targets": ["src/billing/subscription.ts"],
+                            "goal": "change paid subscription renewal behavior",
+                        },
+                    },
+                }
+            )
+            self.assertIsNotNone(called)
+            text = called["result"]["content"][0]["text"]
+            self.assertIn("API route: `src/routes/billing.ts`", text)
+            self.assertIn("Advisory: this is an impact map", text)
 
     def test_goal_cli_json_emits_contract_schema(self) -> None:
         with sample_repo() as repo:
@@ -226,7 +300,17 @@ class EdgebaseTests(unittest.TestCase):
             listed = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
             self.assertIsNotNone(listed)
             tools = listed["result"]["tools"]
-            self.assertEqual([tool["name"] for tool in tools], ["edgebase_context", "edgebase_goal", "edgebase_checkpoint", "edgebase_fork_plan", "edgebase_resume"])
+            self.assertEqual(
+                [tool["name"] for tool in tools],
+                [
+                    "edgebase_context",
+                    "edgebase_goal",
+                    "edgebase_radius",
+                    "edgebase_checkpoint",
+                    "edgebase_fork_plan",
+                    "edgebase_resume",
+                ],
+            )
 
             prompts = server.handle({"jsonrpc": "2.0", "id": 3, "method": "prompts/list"})
             self.assertIsNotNone(prompts)
@@ -806,6 +890,83 @@ class sample_repo:
         run(self.root, "git", "config", "user.name", "Tester")
         run(self.root, "git", "add", ".")
         run(self.root, "git", "commit", "-m", "initial")
+        return self.root
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.tmp.cleanup()
+
+
+class billing_repo:
+    def __enter__(self) -> Path:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        for directory in (
+            "src/billing",
+            "src/routes",
+            "src/notifications",
+            "tests/billing",
+            "migrations",
+        ):
+            (self.root / directory).mkdir(parents=True, exist_ok=True)
+        (self.root / "src" / "billing" / "subscription.ts").write_text(
+            "\n".join(
+                [
+                    "import Stripe from 'stripe';",
+                    "",
+                    "export function renewSubscription(customerId: string) {",
+                    "  const stripe = new Stripe('test');",
+                    "  return stripe.subscriptions.update(customerId, { cancel_at_period_end: false });",
+                    "}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (self.root / "src" / "routes" / "billing.ts").write_text(
+            "\n".join(
+                [
+                    "import { renewSubscription } from '../billing/subscription';",
+                    "",
+                    "export function billingRoute(customerId: string) {",
+                    "  return renewSubscription(customerId);",
+                    "}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (self.root / "src" / "notifications" / "invoices.ts").write_text(
+            "\n".join(
+                [
+                    "import { renewSubscription } from '../billing/subscription';",
+                    "",
+                    "export function sendInvoice(customerId: string) {",
+                    "  return renewSubscription(customerId);",
+                    "}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (self.root / "tests" / "billing" / "subscription.test.ts").write_text(
+            "\n".join(
+                [
+                    "import { renewSubscription } from '../../src/billing/subscription';",
+                    "",
+                    "test('renews a subscription', () => {",
+                    "  expect(renewSubscription('cus_test')).toBeTruthy();",
+                    "});",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (self.root / "migrations" / "001_subscription.sql").write_text("-- subscription shape\n", encoding="utf-8")
+        run(self.root, "git", "init")
+        run(self.root, "git", "config", "user.email", "tester@example.com")
+        run(self.root, "git", "config", "user.name", "Tester")
+        run(self.root, "git", "add", ".")
+        run(self.root, "git", "commit", "-m", "initial billing")
         return self.root
 
     def __exit__(self, exc_type, exc, tb) -> None:
