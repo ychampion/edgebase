@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.2 - 2026-05-26
+
+### Added
+
+- Claude Code `UserPromptSubmit` hook that injects compact Edgebase context automatically for likely coding prompts.
+- Claude Code project skill `/edgebase <task>` for explicit context refresh without memorizing MCP tool syntax.
+- MCP prompt named `edgebase` for clients that expose prompt or slash-command style MCP surfaces.
+
+### Changed
+
+- Setup and docs no longer tell users to paste "Use edgebase_context" before each task.
+- Agent instructions now tell agents to use Edgebase automatically when broad structural context is needed.
+- Setup now adds `.edgebase/` to the local git exclude file instead of dirtying fresh repos with cache files.
+- MCP server version now follows the package version.
+
 ## 0.1.1 - 2026-05-26
 
 ### Added

@@ -33,8 +33,7 @@ python3 -m pip install --user git+https://github.com/ychampion/edgebase.git && p
 Explain the changes before you make unrelated edits. After setup, verify with:
 python3 -m edgebase doctor --scope both
 
-Use edgebase_context before broad file exploration or edits. If MCP is unavailable, use:
-python3 -m edgebase context "<task>" --budget 1200
+Do not add generated architecture summaries to AGENTS.md. Edgebase keeps AGENTS.md minimal, installs MCP server config, and enables automatic context routing where the agent client supports it.
 ```
 
 ## What Edgebase Changes
@@ -42,9 +41,11 @@ python3 -m edgebase context "<task>" --budget 1200
 Setup writes or updates only local configuration files:
 
 - `.edgebase/index.sqlite3`: rebuildable local cache, ignored by git.
-- `AGENTS.md`: marker-bounded instructions that tell agents when to use Edgebase.
+- `.git/info/exclude`: local ignore entry for `.edgebase/`; committed `.gitignore` is not modified.
+- `AGENTS.md`: marker-bounded instructions that tell agents to use Edgebase automatically when broad code context is needed.
 - `.mcp.json`: Claude Code project MCP server.
-- `.claude/settings.json`: Claude Code SessionStart and async PostToolUse hooks.
+- `.claude/settings.json`: Claude Code automatic UserPromptSubmit context hook plus SessionStart and async PostToolUse hooks.
+- `.claude/skills/edgebase/SKILL.md`: Claude Code project skill exposed as `/edgebase <task>`.
 - `.codex/config.toml` and/or `~/.codex/config.toml`: Codex MCP server.
 - `.cursor/mcp.json` and/or `~/.cursor/mcp.json`: Cursor MCP server.
 - `.gemini/settings.json` and/or `~/.gemini/settings.json`: Gemini CLI MCP server.
@@ -73,7 +74,16 @@ Edgebase writes project-scoped `.mcp.json`:
 It also writes `.claude/settings.json` hooks:
 
 - `SessionStart`: adds a short freshness note to Claude's context.
+- `UserPromptSubmit`: injects a compact Edgebase capsule next to likely coding prompts before Claude starts exploring.
 - `PostToolUse`: asynchronously reindexes files after Write/Edit/MultiEdit.
+
+It also writes a project skill:
+
+```text
+/edgebase <task>
+```
+
+Use the skill when you want to force a fresh capsule manually. Normal coding prompts do not need the phrase "Use edgebase_context"; the prompt hook supplies context automatically when the prompt looks like implementation, debugging, review, or investigation work.
 
 Useful checks:
 
@@ -120,11 +130,7 @@ Edgebase writes `.cursor/mcp.json` and/or `~/.cursor/mcp.json`:
 }
 ```
 
-Cursor uses MCP tools when the agent decides they are relevant. If it does not, prompt:
-
-```text
-Use edgebase_context before editing.
-```
+Cursor documents that Composer Agent automatically uses relevant MCP tools listed under available tools. Edgebase also writes the `AGENTS.md` marker so the agent has a repo-local instruction to route broad structural context through `edgebase_context`.
 
 ## Gemini CLI
 
@@ -174,6 +180,8 @@ When MCP is unavailable:
 ```bash
 python3 -m edgebase context "implement password reset" --changed-file src/auth.py --budget 1200
 ```
+
+MCP clients that expose prompts can also use the MCP prompt named `edgebase`, which returns the same source-backed capsule in prompt form. Edgebase still exposes only one primary tool, `edgebase_context`; the prompt is a convenience surface for clients with slash-command-style prompt menus.
 
 Refresh:
 

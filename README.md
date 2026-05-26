@@ -2,13 +2,15 @@
 
 Edgebase is a local, git-native context layer for coding agents.
 
-It keeps `AGENTS.md` small, indexes the repository into a rebuildable SQLite graph, and exposes one MCP tool that agents can call before editing:
+It keeps `AGENTS.md` small, indexes the repository into a rebuildable SQLite graph, and exposes one MCP tool that agents can use before editing:
 
 ```text
 edgebase_context(task, changed_files?, budget?)
 ```
 
-The output is a compact, source-backed context capsule: high-signal files, symbols, imports, conservative call edges, inferred tests, owners, churn, freshness, and provenance. Edgebase is not a vector database, a Neo4j wrapper, or a generic memory product. It is a small local substrate for answering:
+The output is a compact, source-backed context capsule: high-signal files, symbols, imports, conservative call edges, inferred tests, owners, churn, freshness, and provenance. Claude Code also gets automatic prompt-time context injection through hooks, so users do not need to remember a special phrase before each task.
+
+Edgebase is not a vector database, a Neo4j wrapper, or a generic memory product. It is a small local substrate for answering:
 
 > Given this task and current diff, what context should the agent read before touching code?
 
@@ -54,8 +56,10 @@ If you want Claude Code, Codex, Cursor, Gemini CLI, OpenCode, or Windsurf to ins
 Install Edgebase for this repository. Run:
 python3 -m pip install --user git+https://github.com/ychampion/edgebase.git && python3 -m edgebase setup --scope both
 
-After setup, restart if needed. Before broad code exploration or edits, use the edgebase_context MCP tool with the task and changed files. If MCP is unavailable, run:
-python3 -m edgebase context "<task>" --budget 1200
+After setup, restart if needed and verify with:
+python3 -m edgebase doctor --scope both
+
+Do not add generated architecture summaries to AGENTS.md. Edgebase keeps AGENTS.md minimal, installs MCP server config, and enables automatic context routing where the agent client supports it.
 ```
 
 ## What Setup Changes
@@ -65,8 +69,9 @@ python3 -m edgebase context "<task>" --budget 1200
 | Target | Project file | User file | Behavior |
 | --- | --- | --- | --- |
 | Edgebase cache | `.edgebase/index.sqlite3` | none | Rebuildable local graph cache, ignored by git |
-| Agent instructions | `AGENTS.md` marker block | none | Tells agents to call `edgebase_context` before broad exploration |
-| Claude Code | `.mcp.json`, `.claude/settings.json` | none by default | MCP server plus SessionStart/PostToolUse freshness hooks |
+| Git ignore | `.git/info/exclude` | none | Locally ignores `.edgebase/` without changing committed ignore files |
+| Agent instructions | `AGENTS.md` marker block | none | Tells agents to use Edgebase automatically for broad exploration/editing |
+| Claude Code | `.mcp.json`, `.claude/settings.json`, `.claude/skills/edgebase/SKILL.md` | none by default | MCP server, automatic UserPromptSubmit context, SessionStart/PostToolUse freshness hooks, `/edgebase` skill |
 | Codex | `.codex/config.toml` | `~/.codex/config.toml` | MCP server entry |
 | Cursor | `.cursor/mcp.json` | `~/.cursor/mcp.json` | MCP server entry |
 | Gemini CLI | `.gemini/settings.json` | `~/.gemini/settings.json` | MCP server entry |
@@ -80,7 +85,11 @@ Setup uses the Python interpreter that ran setup, with `-m edgebase`, instead of
 
 ## Day-To-Day Usage
 
-Most users do not run Edgebase manually after setup. Agents see the MCP tool and the `AGENTS.md` marker.
+Most users do not run Edgebase manually after setup.
+
+- Claude Code: Edgebase injects a compact context capsule automatically for likely coding prompts through `UserPromptSubmit`. The project skill `/edgebase <task>` is also installed as an explicit command.
+- Codex, Cursor, Gemini CLI, OpenCode, and Windsurf: Edgebase installs MCP config and a marker-bounded `AGENTS.md` instruction telling agents to use `edgebase_context` automatically before broad code exploration or edits. Whether the tool is called without a reminder depends on each client planner, but no per-task user phrase is required by Edgebase itself.
+- Any client: the MCP prompt named `edgebase` is available for clients that expose MCP prompts or slash-command-style prompt menus.
 
 Useful manual commands:
 
@@ -90,12 +99,6 @@ python3 -m edgebase index --changed
 python3 -m edgebase stats
 python3 -m edgebase doctor --scope both
 python3 -m edgebase disable --scope both
-```
-
-If an MCP client does not use the tool automatically, explicitly ask:
-
-```text
-Use edgebase_context for this task before editing.
 ```
 
 ## What It Indexes
@@ -113,9 +116,9 @@ Dynamic-language call graphs are confidence-scored. Low-confidence call edges ar
 
 | Agent | Status | Notes |
 | --- | --- | --- |
-| Claude Code | Supported | Project `.mcp.json`; async PostToolUse freshness hook; SessionStart context hook |
+| Claude Code | Supported | Project `.mcp.json`; automatic UserPromptSubmit context hook; async PostToolUse refresh; `/edgebase` project skill |
 | Codex | Supported | Global `~/.codex/config.toml` MCP entry is the verified CLI path; verify with `codex mcp list` |
-| Cursor | Supported | Project and global `mcp.json`; tools are used when the agent chooses them |
+| Cursor | Supported | Project and global `mcp.json`; Cursor says Composer Agent automatically uses relevant MCP tools |
 | Gemini CLI | Supported | Project and global `settings.json` with `mcpServers` |
 | OpenCode | Supported | Local MCP server under `mcp.edgebase`, `enabled: true` |
 | Windsurf | Supported | Global Cascade MCP config |
@@ -132,6 +135,14 @@ extractors -> .edgebase/index.sqlite3 -> context ranker -> edgebase_context
 ```
 
 The cache is rebuildable. Git remains the source of truth.
+
+Automation layers:
+
+- prompt hook: Claude Code receives small context next to coding prompts before it starts exploring
+- edit hook: Claude Code refreshes touched files after Write/Edit/MultiEdit
+- git hook: post-commit refresh keeps the cache aligned with committed changes
+- MCP: every supported agent gets the same `edgebase_context` tool over stdio
+- AGENTS marker: static repo instructions stay tiny and tell agents to route structural context through Edgebase
 
 See [Architecture](docs/ARCHITECTURE.md) and [Validation](docs/VALIDATION.md).
 

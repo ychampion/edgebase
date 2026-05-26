@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from . import __version__
 from .context import build_context
 from .indexer import index_repo
 from .store import Store
@@ -56,8 +57,11 @@ class McpServer:
                     request_id,
                     {
                         "protocolVersion": "2025-06-18",
-                        "capabilities": {"tools": {"listChanged": False}},
-                        "serverInfo": {"name": "edgebase", "version": "0.1.0"},
+                        "capabilities": {
+                            "tools": {"listChanged": False},
+                            "prompts": {"listChanged": False},
+                        },
+                        "serverInfo": {"name": "edgebase", "version": __version__},
                     },
                 )
             if method == "notifications/initialized":
@@ -66,6 +70,61 @@ class McpServer:
                 return self._result(request_id, {})
             if method == "tools/list":
                 return self._result(request_id, {"tools": [tool_definition()]})
+            if method == "prompts/list":
+                return self._result(
+                    request_id,
+                    {
+                        "prompts": [
+                            {
+                                "name": "edgebase",
+                                "title": "Edgebase Context",
+                                "description": "Fetch source-backed codebase context before editing.",
+                                "arguments": [
+                                    {
+                                        "name": "task",
+                                        "description": "The coding task or investigation goal.",
+                                        "required": True,
+                                    },
+                                    {
+                                        "name": "budget",
+                                        "description": "Approximate token budget.",
+                                        "required": False,
+                                    },
+                                ],
+                            }
+                        ]
+                    },
+                )
+            if method == "prompts/get":
+                params = request.get("params") or {}
+                if params.get("name") != "edgebase":
+                    return self._error(request_id, -32602, f"Unknown prompt: {params.get('name')}")
+                args = params.get("arguments") or {}
+                task = str(args.get("task") or "").strip()
+                if not task:
+                    return self._error(request_id, -32602, "`task` is required")
+                budget = int(args.get("budget") or 1200)
+                if not Store(self.root).exists():
+                    index_repo(self.root)
+                capsule = build_context(self.root, task, [], budget)
+                return self._result(
+                    request_id,
+                    {
+                        "description": "Edgebase source-backed context capsule.",
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": {
+                                    "type": "text",
+                                    "text": (
+                                        f"{capsule.markdown}\n\n"
+                                        "Use this Edgebase context as the first read set before broad exploration or edits."
+                                    ),
+                                },
+                            }
+                        ],
+                    },
+                )
             if method == "tools/call":
                 params = request.get("params") or {}
                 name = params.get("name")

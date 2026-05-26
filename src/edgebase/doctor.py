@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .git import find_repo_root
 from .indexer import index_repo
-from .setup import normalize_agents
+from .setup import CLAUDE_SKILL_START, normalize_agents
 from .store import Store
 
 
@@ -94,6 +94,14 @@ def agent_config_checks(repo_root: Path, agents: set[str], scope: str) -> list[C
     checks: list[Check] = []
     if "claude" in agents and scope in {"project", "both"}:
         checks.append(json_mcp_check(repo_root / ".mcp.json", "Claude Code project config"))
+        checks.append(claude_hooks_check(repo_root / ".claude" / "settings.json"))
+        checks.append(
+            text_contains_check(
+                repo_root / ".claude" / "skills" / "edgebase" / "SKILL.md",
+                CLAUDE_SKILL_START,
+                "Claude Code /edgebase skill",
+            )
+        )
     if "codex" in agents and scope in {"project", "both"}:
         checks.append(
             text_contains_check(
@@ -148,6 +156,25 @@ def opencode_check(path: Path, label: str) -> Check:
     if isinstance(edgebase, dict):
         return Check(label, "warn", "edgebase server configured but disabled")
     return Check(label, "warn", "edgebase server not configured")
+
+
+def claude_hooks_check(path: Path) -> Check:
+    if not path.exists():
+        return Check("Claude Code hooks", "warn", f"missing {path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return Check("Claude Code hooks", "fail", f"invalid JSON: {exc}")
+    hooks = data.get("hooks") if isinstance(data, dict) else None
+    rendered = json.dumps(hooks) if isinstance(hooks, dict) else ""
+    missing = [
+        name
+        for name in ("claude-user-prompt-submit", "claude-session-start", "claude-post-tool-use")
+        if name not in rendered
+    ]
+    if missing:
+        return Check("Claude Code hooks", "warn", "missing " + ", ".join(missing))
+    return Check("Claude Code hooks", "ok", str(path))
 
 
 def text_contains_check(path: Path, needle: str, label: str) -> Check:

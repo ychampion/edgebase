@@ -68,6 +68,17 @@ def install_claude_hooks(root: str | Path) -> Path:
         ]
     }
     append_unique(hooks["SessionStart"], session_hook)
+    hooks.setdefault("UserPromptSubmit", [])
+    user_prompt_hook = {
+        "hooks": [
+            {
+                "type": "command",
+                "command": f'"{sys.executable}" -m edgebase hooks claude-user-prompt-submit --root "{repo_root}"',
+                "timeout": 30,
+            }
+        ]
+    }
+    append_unique(hooks["UserPromptSubmit"], user_prompt_hook)
     post_tool = hooks.setdefault("PostToolUse", [])
     for matcher in ("Write", "Edit", "MultiEdit"):
         append_unique(
@@ -99,7 +110,7 @@ def uninstall_claude_hooks(root: str | Path) -> Path:
         raise RuntimeError(f"Refusing to edit invalid JSON: {settings_path}") from exc
     hooks = settings.get("hooks")
     if isinstance(hooks, dict):
-        for event_name in ("SessionStart", "PostToolUse"):
+        for event_name in ("SessionStart", "UserPromptSubmit", "PostToolUse"):
             entries = hooks.get(event_name)
             if isinstance(entries, list):
                 hooks[event_name] = [entry for entry in entries if not hook_entry_runs_edgebase(entry)]
@@ -140,7 +151,7 @@ def handle_claude_session_start(root: str | Path) -> int:
     store = Store(repo_root)
     if not store.exists():
         result = index_repo(repo_root)
-        msg = f"Edgebase initialized graph with {result.files} files. Use edgebase_context for structural context."
+        msg = f"Edgebase initialized graph with {result.files} files. Prompt-time context is enabled."
     else:
         stats = store.stats()
         changed = changed_files(repo_root)
@@ -149,6 +160,29 @@ def handle_claude_session_start(root: str | Path) -> int:
             f"{stats['edges']} edges. Changed files: {len(changed)}."
         )
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": msg}}))
+    return 0
+
+
+def handle_claude_user_prompt_submit(root: str | Path) -> int:
+    payload = read_json_stdin()
+    prompt = extract_prompt(payload)
+    if not should_inject_prompt_context(prompt):
+        return 0
+    repo_root = find_repo_root(root)
+    try:
+        store = Store(repo_root)
+        if not store.exists():
+            index_repo(repo_root)
+        changed = changed_files(repo_root)
+        capsule = build_context(repo_root, prompt, changed, budget=1100)
+        msg = (
+            "Edgebase automatic context for this coding prompt. "
+            "Use this source-backed capsule as the first read set before broad exploration or edits.\n\n"
+            f"{capsule.markdown}"
+        )
+    except Exception as exc:
+        msg = f"Edgebase automatic context was unavailable: {exc}. Continue with normal repository exploration."
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": msg}}))
     return 0
 
 
@@ -168,6 +202,54 @@ def handle_claude_post_tool_use(root: str | Path) -> int:
         msg = "Edgebase hook ran but found no edited file path in the tool input."
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": msg}}))
     return 0
+
+
+def extract_prompt(payload: dict[str, Any]) -> str:
+    for key in ("prompt", "user_prompt", "message"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def should_inject_prompt_context(prompt: str) -> bool:
+    text = " ".join(prompt.lower().split())
+    if not text:
+        return False
+    trivial = {
+        "ok",
+        "okay",
+        "yes",
+        "no",
+        "thanks",
+        "thank you",
+        "continue",
+        "go on",
+        "sounds good",
+    }
+    if text in trivial:
+        return False
+    hints = (
+        "add",
+        "build",
+        "change",
+        "debug",
+        "error",
+        "fail",
+        "fix",
+        "implement",
+        "install",
+        "migrate",
+        "refactor",
+        "remove",
+        "rename",
+        "review",
+        "test",
+        "update",
+        "where",
+        "why",
+    )
+    return any(hint in text for hint in hints) or len(text.split()) >= 6
 
 
 def read_json_stdin() -> dict[str, Any]:

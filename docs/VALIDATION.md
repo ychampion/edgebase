@@ -50,6 +50,7 @@ python3 -m unittest -v
 python3 -m compileall -q src tests
 python3 -m edgebase setup --scope project --agents claude,codex,cursor,gemini,opencode --no-hooks
 python3 -m edgebase doctor --scope project --agents claude,codex,cursor,gemini,opencode
+printf '{"prompt":"change login hashing behavior"}' | python3 -m edgebase hooks claude-user-prompt-submit --root .
 ```
 
 When installed from GitHub, verify:
@@ -69,7 +70,7 @@ Where binaries are available:
 - Gemini CLI: `gemini mcp list`
 - OpenCode: `opencode mcp list`
 
-For clients not installed in the verification environment, validate the generated config shape and the Edgebase MCP stdio handshake.
+For Claude Code, also validate that `.claude/settings.json` contains `UserPromptSubmit` and that `.claude/skills/edgebase/SKILL.md` exists. For clients not installed in the verification environment, validate the generated config shape and the Edgebase MCP stdio handshake.
 
 ## Kill Criteria
 

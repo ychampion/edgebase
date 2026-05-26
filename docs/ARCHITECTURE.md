@@ -63,6 +63,7 @@ Freshness paths:
 - `edgebase index`: full rebuild.
 - `edgebase index --changed`: incremental refresh for git-changed files.
 - Git `post-commit` hook: refresh after commits.
+- Claude Code `UserPromptSubmit` hook: inject a small context capsule next to likely coding prompts.
 - Claude Code `PostToolUse` hook: async refresh after Write/Edit/MultiEdit.
 - MCP server startup: indexes the repo automatically if no cache exists.
 
@@ -87,13 +88,20 @@ The returned capsule includes:
 
 ## Agent Integration Boundary
 
-Edgebase does not try to control agents. It gives them a reliable tool and a small instruction marker:
+Edgebase does not try to control agents. It gives them a reliable tool, a small instruction marker, and client-specific automation where the client has documented hooks:
 
 ```text
-Before broad code exploration or edits, call edgebase_context.
+Use injected Edgebase context when present; otherwise call edgebase_context before broad exploration or edits.
 ```
 
-Claude Code has hook support, so Edgebase can also provide SessionStart freshness context and async edit refresh. Other clients are MCP-first until their hook semantics are stable and documented.
+Claude Code has documented prompt and tool hooks, so Edgebase provides:
+
+- `UserPromptSubmit`: prompt-time context capsule before Claude explores.
+- `SessionStart`: freshness summary when a session opens.
+- `PostToolUse`: async refresh after Write/Edit/MultiEdit.
+- project skill `/edgebase <task>` for explicit manual refresh.
+
+Other clients are MCP-first until their hook semantics are stable and documented. For those clients, setup writes MCP config and an `AGENTS.md` marker that instructs the agent to route broad structural context through Edgebase automatically. Edgebase also exposes an MCP prompt named `edgebase` for clients that surface prompt menus.
 
 ## Failure Modes
 

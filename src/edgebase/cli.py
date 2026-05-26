@@ -12,6 +12,7 @@ from .git import changed_files, find_repo_root
 from .hooks import (
     handle_claude_post_tool_use,
     handle_claude_session_start,
+    handle_claude_user_prompt_submit,
     handle_git_post_commit,
     install_claude_hooks,
     install_git_hook,
@@ -124,6 +125,9 @@ def build_parser() -> argparse.ArgumentParser:
     session_hook = hook_sub.add_parser("claude-session-start")
     add_subcommand_root(session_hook)
     session_hook.set_defaults(func=lambda args: handle_claude_session_start(args.root))
+    prompt_hook = hook_sub.add_parser("claude-user-prompt-submit")
+    add_subcommand_root(prompt_hook)
+    prompt_hook.set_defaults(func=lambda args: handle_claude_user_prompt_submit(args.root))
     post_hook = hook_sub.add_parser("claude-post-tool-use")
     add_subcommand_root(post_hook)
     post_hook.set_defaults(func=lambda args: handle_claude_post_tool_use(args.root))
@@ -217,7 +221,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print(f"{result.action}: {result.path} ({result.detail})")
     print("")
     print("Edgebase is enabled for the selected agents.")
-    print("Restart your agent/IDE, then ask it: `Use edgebase_context for this task before editing.`")
+    print("Restart your agent/IDE. Claude Code injects Edgebase context automatically for coding prompts.")
+    print("Other MCP clients get the Edgebase tool and AGENTS.md routing instructions automatically.")
     print("Turn it off with: `edgebase disable --scope {}`".format(args.scope))
     return 0
 

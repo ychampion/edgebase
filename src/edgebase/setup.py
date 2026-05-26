@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from .git import run_git
 from .hooks import install_claude_hooks, install_git_hook, uninstall_claude_hooks, uninstall_git_hook
 from .indexer import index_repo
 
@@ -13,6 +15,8 @@ from .indexer import index_repo
 ALL_AGENTS = ("claude", "codex", "cursor", "gemini", "opencode", "windsurf")
 AGENT_DOC_START = "<!-- EDGEBASE:START -->"
 AGENT_DOC_END = "<!-- EDGEBASE:END -->"
+CLAUDE_SKILL_START = "<!-- EDGEBASE:CLAUDE-SKILL:START -->"
+CLAUDE_SKILL_END = "<!-- EDGEBASE:CLAUDE-SKILL:END -->"
 
 
 @dataclass(frozen=True)
@@ -37,6 +41,7 @@ def setup_repo(
     results.append(
         SetupResult(repo_root / ".edgebase" / "index.sqlite3", "indexed", f"{index.files} files")
     )
+    results.append(ensure_edgebase_cache_excluded(repo_root))
 
     if write_agents_md:
         results.append(write_agent_docs(repo_root))
@@ -125,6 +130,22 @@ def command_array(repo_root: Path, command: str | None = None) -> list[str]:
     return [executable, *prefix, "mcp", "--root", str(repo_root)]
 
 
+def ensure_edgebase_cache_excluded(repo_root: Path) -> SetupResult:
+    proc = run_git(repo_root, ["rev-parse", "--git-path", "info/exclude"], timeout=3)
+    if not proc or proc.returncode != 0 or not proc.stdout.strip():
+        return SetupResult(repo_root / ".edgebase", "skipped", "git exclude unavailable")
+    exclude_path = Path(proc.stdout.strip())
+    if not exclude_path.is_absolute():
+        exclude_path = repo_root / exclude_path
+    exclude_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = exclude_path.read_text(encoding="utf-8") if exclude_path.exists() else ""
+    if ".edgebase/" in {line.strip() for line in existing.splitlines()}:
+        return SetupResult(exclude_path, "skipped", ".edgebase/ already ignored")
+    prefix = "\n" if existing and not existing.endswith("\n") else ""
+    exclude_path.write_text(f"{existing}{prefix}# Edgebase cache\n.edgebase/\n", encoding="utf-8")
+    return SetupResult(exclude_path, "updated", "ignored local Edgebase cache")
+
+
 def write_agent_docs(repo_root: Path) -> SetupResult:
     agents_path = repo_root / "AGENTS.md"
     snippet = agent_docs_block()
@@ -146,16 +167,19 @@ def agent_docs_block() -> str:
     return (
         f"{AGENT_DOC_START}\n"
         "## Edgebase Context\n\n"
-        "Edgebase is enabled for this repository. Before broad code exploration or edits, call the MCP tool "
-        "`edgebase_context` with the task and any changed files. Use it to get a small, source-backed context "
-        "capsule instead of loading generated architecture summaries.\n\n"
-        "Fallback when MCP tools are unavailable:\n\n"
+        "Edgebase is enabled for this repository. Use the injected Edgebase context when it is present. "
+        "When no injected context is present and the task needs broad code exploration or edits, call the MCP tool "
+        "`edgebase_context` with the task and any changed files before reading many files. Do not wait for the user "
+        "to request Edgebase explicitly.\n\n"
+        "Fallback when MCP tools and automatic hooks are unavailable:\n\n"
         "```bash\n"
         "edgebase context \"<task>\" --budget 1200\n"
         "```\n\n"
         "Keep static instructions here minimal; Edgebase supplies fresh structure, symbols, tests, owners, "
-        "and change-hotspot context from the local git working tree. Refresh manually with "
-        "`edgebase index --changed` after edits, or disable with `edgebase disable --scope both`.\n"
+        "and change-hotspot context from the local git working tree. Claude Code receives automatic prompt-time "
+        "context through hooks when hooks are installed, and also exposes `/edgebase <task>` as a project skill. "
+        "Refresh manually with `edgebase index --changed` after edits, or disable with "
+        "`edgebase disable --scope both`.\n"
         f"{AGENT_DOC_END}\n"
     )
 
@@ -187,9 +211,17 @@ def setup_claude(
         path = repo_root / ".mcp.json"
         merge_mcp_json(path, "edgebase", stdio_config(repo_root, command))
         results.append(SetupResult(path, "updated", "Claude Code project MCP server"))
+        try:
+            skill_path = install_claude_skill(repo_root, command)
+        except RuntimeError as exc:
+            results.append(
+                SetupResult(repo_root / ".claude" / "skills" / "edgebase" / "SKILL.md", "skipped", str(exc))
+            )
+        else:
+            results.append(SetupResult(skill_path, "updated", "Claude Code project skill /edgebase"))
         if install_hooks:
             hooks_path = install_claude_hooks(repo_root)
-            results.append(SetupResult(hooks_path, "updated", "Claude Code freshness hooks"))
+            results.append(SetupResult(hooks_path, "updated", "Claude Code automatic prompt and freshness hooks"))
     if scope in {"global", "both"}:
         results.append(
             SetupResult(
@@ -199,6 +231,42 @@ def setup_claude(
             )
         )
     return results
+
+
+def install_claude_skill(repo_root: Path, command: str | None) -> Path:
+    skill_path = repo_root / ".claude" / "skills" / "edgebase" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True, exist_ok=True)
+    if skill_path.exists():
+        existing = skill_path.read_text(encoding="utf-8")
+        if CLAUDE_SKILL_START not in existing:
+            raise RuntimeError(f"Refusing to overwrite existing Claude skill without Edgebase marker: {skill_path}")
+    skill_path.write_text(claude_skill_content(repo_root, command), encoding="utf-8")
+    return skill_path
+
+
+def claude_skill_content(repo_root: Path, command: str | None) -> str:
+    executable, prefix = command_parts(command)
+    command_prefix = " ".join(
+        shlex.quote(part)
+        for part in [executable, *prefix, "--root", str(repo_root), "context"]
+    )
+    return (
+        f"{CLAUDE_SKILL_START}\n"
+        "---\n"
+        "name: edgebase\n"
+        "description: Fetch source-backed Edgebase context for a coding task before broad code exploration or edits.\n"
+        "argument-hint: \"<coding task>\"\n"
+        "---\n\n"
+        "# Edgebase\n\n"
+        "Fetch the current Edgebase context capsule for this task, then use it as the first read set before broad "
+        "repository exploration or edits.\n\n"
+        "```bash\n"
+        f"{command_prefix} \"$ARGUMENTS\" --budget 1200\n"
+        "```\n\n"
+        "If `$ARGUMENTS` is empty, infer the task from the current user request. Prefer the MCP tool "
+        "`edgebase_context` when it is available; otherwise run the command above.\n"
+        f"{CLAUDE_SKILL_END}\n"
+    )
 
 
 def setup_codex(repo_root: Path, scope: str, command: str | None) -> list[SetupResult]:
@@ -378,6 +446,8 @@ def disable_claude(repo_root: Path, scope: str, remove_hooks: bool) -> list[Setu
         path = repo_root / ".mcp.json"
         action = "updated" if remove_mcp_json(path, "edgebase") else "skipped"
         results.append(SetupResult(path, action, "Claude Code project MCP server removed"))
+        skill_path = uninstall_claude_skill(repo_root)
+        results.append(SetupResult(skill_path, "updated", "removed Claude Code project skill /edgebase"))
         if remove_hooks:
             hooks_path = uninstall_claude_hooks(repo_root)
             results.append(SetupResult(hooks_path, "updated", "removed Claude Code freshness hooks"))
@@ -390,6 +460,22 @@ def disable_claude(repo_root: Path, scope: str, remove_hooks: bool) -> list[Setu
             )
         )
     return results
+
+
+def uninstall_claude_skill(repo_root: Path) -> Path:
+    skill_path = repo_root / ".claude" / "skills" / "edgebase" / "SKILL.md"
+    if not skill_path.exists():
+        return skill_path
+    existing = skill_path.read_text(encoding="utf-8")
+    if CLAUDE_SKILL_START not in existing:
+        return skill_path
+    skill_path.unlink()
+    for parent in (skill_path.parent, skill_path.parent.parent):
+        try:
+            parent.rmdir()
+        except OSError:
+            break
+    return skill_path
 
 
 def disable_codex(repo_root: Path, scope: str) -> list[SetupResult]:
