@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 
+from . import __version__
 from .benchmark import run_benchmark
 from .context import build_context
 from .context_branches import create_checkpoint, create_fork_plan, render_resume, resume_snapshot
@@ -49,6 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="edgebase",
         description="Git-native, provenance-backed context capsules for coding agents.",
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--root", default=".", help="Repository root or any path inside it.")
     sub = parser.add_subparsers(dest="command")
 
@@ -253,7 +255,9 @@ def cmd_init(args: argparse.Namespace) -> int:
         if not agents_path.exists():
             agents_path.write_text(
                 "# Agent Instructions\n\n"
-                "Keep static instructions minimal. For codebase structure, run:\n\n"
+                "Keep static instructions minimal. For codebase structure, use slash commands when available:\n\n"
+                "```text\n/edgebase \"<task>\"\n/edgebase-goal \"<goal>\"\n```\n\n"
+                "Fallback commands:\n\n"
                 "```bash\nedgebase context \"<task>\" --budget 1200\n"
                 "edgebase goal \"<goal>\" --budget 1200 --record-preflight\n"
                 "edgebase resume\n```\n",
@@ -296,7 +300,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     print("")
     print("Edgebase is enabled for the selected agents.")
     print("Restart your agent/IDE. Claude Code and Codex load Edgebase automatically when hooks are trusted.")
-    print("MCP clients also get edgebase_context and edgebase_goal, with AGENTS.md routing instructions.")
+    print("Slash-capable clients get /edgebase and /edgebase-goal. MCP clients also get edgebase_context and edgebase_goal.")
     print("Turn it off with: `edgebase disable --scope {}`".format(args.scope))
     return 0
 

@@ -26,10 +26,14 @@ CLAUDE_SKILL_START = "<!-- EDGEBASE:CLAUDE-SKILL:START -->"
 CLAUDE_SKILL_END = "<!-- EDGEBASE:CLAUDE-SKILL:END -->"
 CLAUDE_GOAL_SKILL_START = "<!-- EDGEBASE:CLAUDE-GOAL-SKILL:START -->"
 CLAUDE_GOAL_SKILL_END = "<!-- EDGEBASE:CLAUDE-GOAL-SKILL:END -->"
+CLAUDE_EDGEBASE_GOAL_SKILL_START = "<!-- EDGEBASE:CLAUDE-EDGEBASE-GOAL-SKILL:START -->"
+CLAUDE_EDGEBASE_GOAL_SKILL_END = "<!-- EDGEBASE:CLAUDE-EDGEBASE-GOAL-SKILL:END -->"
 CODEX_SKILL_START = "<!-- EDGEBASE:CODEX-SKILL:START -->"
 CODEX_SKILL_END = "<!-- EDGEBASE:CODEX-SKILL:END -->"
 CODEX_GOAL_SKILL_START = "<!-- EDGEBASE:CODEX-GOAL-SKILL:START -->"
 CODEX_GOAL_SKILL_END = "<!-- EDGEBASE:CODEX-GOAL-SKILL:END -->"
+CODEX_EDGEBASE_GOAL_SKILL_START = "<!-- EDGEBASE:CODEX-EDGEBASE-GOAL-SKILL:START -->"
+CODEX_EDGEBASE_GOAL_SKILL_END = "<!-- EDGEBASE:CODEX-EDGEBASE-GOAL-SKILL:END -->"
 
 
 @dataclass(frozen=True)
@@ -184,7 +188,12 @@ def agent_docs_block() -> str:
         "Claude Code and Codex hooks record a Goal Capsule before planning and block Write/Edit/MultiEdit "
         "when no fresh capsule exists. MCP clients should call `edgebase_goal` for implementation goals and "
         "`edgebase_context` for read-only investigation before broad exploration.\n\n"
-        "Fallback when MCP tools and automatic hooks are unavailable:\n\n"
+        "Preferred explicit slash commands when skills or MCP prompts are exposed:\n\n"
+        "```text\n"
+        "/edgebase \"<task>\"\n"
+        "/edgebase-goal \"<goal>\"\n"
+        "```\n\n"
+        "Fallback when MCP tools, slash commands, and automatic hooks are unavailable:\n\n"
         "```bash\n"
         "edgebase context \"<task>\" --budget 1200\n"
         "edgebase goal \"<goal>\" --budget 1200 --record-preflight\n"
@@ -244,6 +253,18 @@ def setup_claude(
             )
         else:
             results.append(SetupResult(goal_skill_path, "updated", "Claude Code project skill /goal"))
+        try:
+            edgebase_goal_skill_path = install_claude_edgebase_goal_skill(repo_root, command)
+        except RuntimeError as exc:
+            results.append(
+                SetupResult(
+                    repo_root / ".claude" / "skills" / "edgebase-goal" / "SKILL.md",
+                    "skipped",
+                    str(exc),
+                )
+            )
+        else:
+            results.append(SetupResult(edgebase_goal_skill_path, "updated", "Claude Code project skill /edgebase-goal"))
         if install_hooks:
             hooks_path = install_claude_hooks(repo_root)
             results.append(SetupResult(hooks_path, "updated", "Claude Code automatic prompt and freshness hooks"))
@@ -297,26 +318,61 @@ def claude_skill_content(repo_root: Path, command: str | None) -> str:
 
 
 def install_claude_goal_skill(repo_root: Path, command: str | None) -> Path:
-    skill_path = repo_root / ".claude" / "skills" / "goal" / "SKILL.md"
+    return install_claude_goal_skill_named(
+        repo_root,
+        command,
+        "goal",
+        CLAUDE_GOAL_SKILL_START,
+        CLAUDE_GOAL_SKILL_END,
+    )
+
+
+def install_claude_edgebase_goal_skill(repo_root: Path, command: str | None) -> Path:
+    return install_claude_goal_skill_named(
+        repo_root,
+        command,
+        "edgebase-goal",
+        CLAUDE_EDGEBASE_GOAL_SKILL_START,
+        CLAUDE_EDGEBASE_GOAL_SKILL_END,
+    )
+
+
+def install_claude_goal_skill_named(
+    repo_root: Path,
+    command: str | None,
+    skill_name: str,
+    marker_start: str,
+    marker_end: str,
+) -> Path:
+    skill_path = repo_root / ".claude" / "skills" / skill_name / "SKILL.md"
     skill_path.parent.mkdir(parents=True, exist_ok=True)
     if skill_path.exists():
         existing = skill_path.read_text(encoding="utf-8")
-        if CLAUDE_GOAL_SKILL_START not in existing:
+        if marker_start not in existing:
             raise RuntimeError(f"Refusing to overwrite existing Claude skill without Edgebase marker: {skill_path}")
-    skill_path.write_text(claude_goal_skill_content(repo_root, command), encoding="utf-8")
+    skill_path.write_text(
+        claude_goal_skill_content(repo_root, command, skill_name, marker_start, marker_end),
+        encoding="utf-8",
+    )
     return skill_path
 
 
-def claude_goal_skill_content(repo_root: Path, command: str | None) -> str:
+def claude_goal_skill_content(
+    repo_root: Path,
+    command: str | None,
+    skill_name: str,
+    marker_start: str,
+    marker_end: str,
+) -> str:
     executable, prefix = command_parts(command)
     command_prefix = " ".join(
         shlex.quote(part)
         for part in [executable, *prefix, "--root", str(repo_root), "goal"]
     )
     return (
-        f"{CLAUDE_GOAL_SKILL_START}\n"
+        f"{marker_start}\n"
         "---\n"
-        "name: goal\n"
+        f"name: {skill_name}\n"
         "description: Create an executable Edgebase Goal Capsule and Work Contract before editing.\n"
         "argument-hint: \"<coding goal>\"\n"
         "---\n\n"
@@ -329,7 +385,7 @@ def claude_goal_skill_content(repo_root: Path, command: str | None) -> str:
         "`edgebase_goal` when it is available; otherwise run the command above. If the response includes "
         "`.edgebase/graphs/latest.*` artifact paths, use them as local visual aids without copying raw graph "
         "data into the coding context.\n"
-        f"{CLAUDE_GOAL_SKILL_END}\n"
+        f"{marker_end}\n"
     )
 
 
@@ -339,10 +395,32 @@ def setup_codex(repo_root: Path, scope: str, install_hooks: bool, command: str |
         path = repo_root / ".codex" / "config.toml"
         upsert_codex_toml(path, repo_root, command)
         results.append(SetupResult(path, "updated", "Codex project MCP server"))
-        edgebase_skill = install_codex_skill(repo_root, command)
-        results.append(SetupResult(edgebase_skill, "updated", "Codex project skill /edgebase"))
-        goal_skill = install_codex_goal_skill(repo_root, command)
-        results.append(SetupResult(goal_skill, "updated", "Codex project skill /goal"))
+        try:
+            edgebase_skill = install_codex_skill(repo_root, command)
+        except RuntimeError as exc:
+            results.append(
+                SetupResult(repo_root / ".agents" / "skills" / "edgebase" / "SKILL.md", "skipped", str(exc))
+            )
+        else:
+            results.append(SetupResult(edgebase_skill, "updated", "Codex project skill /edgebase"))
+        try:
+            goal_skill = install_codex_goal_skill(repo_root, command)
+        except RuntimeError as exc:
+            results.append(
+                SetupResult(repo_root / ".agents" / "skills" / "goal" / "SKILL.md", "skipped", str(exc))
+            )
+        else:
+            results.append(SetupResult(goal_skill, "updated", "Codex project skill /goal"))
+        try:
+            edgebase_goal_skill = install_codex_edgebase_goal_skill(repo_root, command)
+        except RuntimeError as exc:
+            results.append(
+                SetupResult(repo_root / ".agents" / "skills" / "edgebase-goal" / "SKILL.md", "skipped", str(exc))
+            )
+        else:
+            results.append(
+                SetupResult(edgebase_goal_skill, "updated", "Codex project skill /edgebase-goal")
+            )
         if install_hooks:
             hooks_path = install_codex_hooks(repo_root)
             results.append(SetupResult(hooks_path, "updated", "Codex preflight hooks"))
@@ -377,25 +455,60 @@ def codex_skill_content(repo_root: Path, command: str | None) -> str:
 
 
 def install_codex_goal_skill(repo_root: Path, command: str | None) -> Path:
-    skill_path = repo_root / ".agents" / "skills" / "goal" / "SKILL.md"
+    return install_codex_goal_skill_named(
+        repo_root,
+        command,
+        "goal",
+        CODEX_GOAL_SKILL_START,
+        CODEX_GOAL_SKILL_END,
+    )
+
+
+def install_codex_edgebase_goal_skill(repo_root: Path, command: str | None) -> Path:
+    return install_codex_goal_skill_named(
+        repo_root,
+        command,
+        "edgebase-goal",
+        CODEX_EDGEBASE_GOAL_SKILL_START,
+        CODEX_EDGEBASE_GOAL_SKILL_END,
+    )
+
+
+def install_codex_goal_skill_named(
+    repo_root: Path,
+    command: str | None,
+    skill_name: str,
+    marker_start: str,
+    marker_end: str,
+) -> Path:
+    skill_path = repo_root / ".agents" / "skills" / skill_name / "SKILL.md"
     skill_path.parent.mkdir(parents=True, exist_ok=True)
-    if skill_path.exists() and CODEX_GOAL_SKILL_START not in skill_path.read_text(encoding="utf-8"):
+    if skill_path.exists() and marker_start not in skill_path.read_text(encoding="utf-8"):
         raise RuntimeError(f"Refusing to overwrite existing Codex skill without Edgebase marker: {skill_path}")
-    skill_path.write_text(codex_goal_skill_content(repo_root, command), encoding="utf-8")
+    skill_path.write_text(
+        codex_goal_skill_content(repo_root, command, skill_name, marker_start, marker_end),
+        encoding="utf-8",
+    )
     return skill_path
 
 
-def codex_goal_skill_content(repo_root: Path, command: str | None) -> str:
+def codex_goal_skill_content(
+    repo_root: Path,
+    command: str | None,
+    skill_name: str,
+    marker_start: str,
+    marker_end: str,
+) -> str:
     executable, prefix = command_parts(command)
     command_prefix = " ".join(shlex.quote(part) for part in [executable, *prefix, "--root", str(repo_root), "goal"])
     return (
-        f"{CODEX_GOAL_SKILL_START}\n"
-        "---\nname: goal\ndescription: Create and record an Edgebase Goal Capsule before editing.\n---\n\n"
+        f"{marker_start}\n"
+        f"---\nname: {skill_name}\ndescription: Create and record an Edgebase Goal Capsule before editing.\n---\n\n"
         "# Goal\n\nUse `edgebase_goal` when available. Otherwise run:\n\n"
         "```bash\n"
         f"{command_prefix} \"$ARGUMENTS\" --budget 1200 --record-preflight\n"
         "```\n\nThe recorded Goal Capsule satisfies the pre-edit gate when hooks are trusted.\n"
-        f"{CODEX_GOAL_SKILL_END}\n"
+        f"{marker_end}\n"
     )
 
 
@@ -576,6 +689,10 @@ def disable_claude(repo_root: Path, scope: str, remove_hooks: bool) -> list[Setu
         results.append(SetupResult(skill_path, "updated", "removed Claude Code project skill /edgebase"))
         goal_skill_path = uninstall_claude_goal_skill(repo_root)
         results.append(SetupResult(goal_skill_path, "updated", "removed Claude Code project skill /goal"))
+        edgebase_goal_skill_path = uninstall_claude_edgebase_goal_skill(repo_root)
+        results.append(
+            SetupResult(edgebase_goal_skill_path, "updated", "removed Claude Code project skill /edgebase-goal")
+        )
         if remove_hooks:
             hooks_path = uninstall_claude_hooks(repo_root)
             results.append(SetupResult(hooks_path, "updated", "removed Claude Code freshness hooks"))
@@ -607,11 +724,19 @@ def uninstall_claude_skill(repo_root: Path) -> Path:
 
 
 def uninstall_claude_goal_skill(repo_root: Path) -> Path:
-    skill_path = repo_root / ".claude" / "skills" / "goal" / "SKILL.md"
+    return uninstall_claude_goal_skill_named(repo_root, "goal", CLAUDE_GOAL_SKILL_START)
+
+
+def uninstall_claude_edgebase_goal_skill(repo_root: Path) -> Path:
+    return uninstall_claude_goal_skill_named(repo_root, "edgebase-goal", CLAUDE_EDGEBASE_GOAL_SKILL_START)
+
+
+def uninstall_claude_goal_skill_named(repo_root: Path, skill_name: str, marker_start: str) -> Path:
+    skill_path = repo_root / ".claude" / "skills" / skill_name / "SKILL.md"
     if not skill_path.exists():
         return skill_path
     existing = skill_path.read_text(encoding="utf-8")
-    if CLAUDE_GOAL_SKILL_START not in existing:
+    if marker_start not in existing:
         return skill_path
     skill_path.unlink()
     for parent in (skill_path.parent, skill_path.parent.parent):
@@ -632,6 +757,8 @@ def disable_codex(repo_root: Path, scope: str, remove_hooks: bool) -> list[Setup
         results.append(SetupResult(skill_path, "updated", "removed Codex project skill /edgebase"))
         goal_skill_path = uninstall_codex_goal_skill(repo_root)
         results.append(SetupResult(goal_skill_path, "updated", "removed Codex project skill /goal"))
+        edgebase_goal_skill_path = uninstall_codex_edgebase_goal_skill(repo_root)
+        results.append(SetupResult(edgebase_goal_skill_path, "updated", "removed Codex project skill /edgebase-goal"))
         if remove_hooks:
             hooks_path = uninstall_codex_hooks(repo_root)
             results.append(SetupResult(hooks_path, "updated", "removed Codex hooks"))
@@ -656,8 +783,16 @@ def uninstall_codex_skill(repo_root: Path) -> Path:
 
 
 def uninstall_codex_goal_skill(repo_root: Path) -> Path:
-    skill_path = repo_root / ".agents" / "skills" / "goal" / "SKILL.md"
-    if not skill_path.exists() or CODEX_GOAL_SKILL_START not in skill_path.read_text(encoding="utf-8"):
+    return uninstall_codex_goal_skill_named(repo_root, "goal", CODEX_GOAL_SKILL_START)
+
+
+def uninstall_codex_edgebase_goal_skill(repo_root: Path) -> Path:
+    return uninstall_codex_goal_skill_named(repo_root, "edgebase-goal", CODEX_EDGEBASE_GOAL_SKILL_START)
+
+
+def uninstall_codex_goal_skill_named(repo_root: Path, skill_name: str, marker_start: str) -> Path:
+    skill_path = repo_root / ".agents" / "skills" / skill_name / "SKILL.md"
+    if not skill_path.exists() or marker_start not in skill_path.read_text(encoding="utf-8"):
         return skill_path
     skill_path.unlink()
     for parent in (skill_path.parent, skill_path.parent.parent):

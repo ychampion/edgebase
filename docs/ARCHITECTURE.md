@@ -132,11 +132,11 @@ Claude Code has documented prompt and tool hooks, so Edgebase provides:
 - `PreCompact`: context checkpoint before compaction.
 - `SessionEnd`: Patch Passport at session end.
 - project skill `/edgebase <task>` for explicit manual refresh.
-- project skill `/goal <goal>` for explicit Goal Capsules.
+- project skill `/edgebase-goal <goal>` for explicit Goal Capsules, with `/goal <goal>` as a compatibility alias.
 
-Codex setup is MCP plus project-scoped hooks and skills. Edgebase writes `.codex/config.toml`, `[features] hooks = true`, `.codex/hooks.json`, `.agents/skills/edgebase`, and `.agents/skills/goal`. When project hooks are trusted, Codex receives the same preflight gate: prompt-time capsule, stale edit block, post-edit refresh, pre-compact checkpoint, and stop-time Patch Passport.
+Codex setup is MCP plus project-scoped hooks and skills. Edgebase writes `.codex/config.toml`, `[features] hooks = true`, `.codex/hooks.json`, `.agents/skills/edgebase`, `.agents/skills/edgebase-goal`, and `.agents/skills/goal`. When project hooks are trusted, Codex receives the same preflight gate: prompt-time capsule, stale edit block, post-edit refresh, pre-compact checkpoint, and stop-time Patch Passport.
 
-Cursor, Gemini CLI, OpenCode, and Windsurf are MCP-first. For those clients, setup writes MCP config and an `AGENTS.md` marker that instructs the agent to route broad structural context through Edgebase automatically. Edgebase also exposes MCP prompts named `edgebase` and `goal` for clients that surface prompt menus.
+Cursor, Gemini CLI, OpenCode, and Windsurf are MCP-first. For those clients, setup writes MCP config and an `AGENTS.md` marker that instructs the agent to route broad structural context through Edgebase automatically. Edgebase also exposes MCP prompts named `edgebase`, `edgebase-goal`, and `goal` for clients that surface prompt menus.
 
 MCP tool and prompt responses also refresh graph artifacts and return the local artifact paths when rendering succeeds. Rendering failures are non-fatal; Edgebase must still return the context or Goal Capsule.
 

@@ -28,8 +28,8 @@ Its flagship feature is **Goal Capsules**: short, executable briefs that tell Co
 - Runs locally with no Docker, cloud service, graph database, or API key.
 - Preserves provenance for every edge: path, line, extractor, confidence, commit, and freshness.
 
-```bash
-python3 -m edgebase goal "Add passwordless login support without breaking existing OAuth"
+```text
+/edgebase-goal "Add passwordless login support without breaking existing OAuth"
 ```
 
 ```text
@@ -65,7 +65,7 @@ Patch contract:
 The final PR must include changed files, rationale, tests run, regression evidence, and unresolved assumptions.
 ```
 
-Goal Capsules are backed by the local graph index, git state, inferred tests, provenance, and working-tree freshness. They are recorded automatically by supported hooks, exposed as `/goal ...` when a manual command is useful, and called through CLI/MCP before write tools run. The same agent-facing paths also refresh optional local graph artifacts at `.edgebase/graphs/latest.html`, `.json`, and `.dot`; agents surface the paths without dumping raw graph data into context.
+Goal Capsules are backed by the local graph index, git state, inferred tests, provenance, and working-tree freshness. They are recorded automatically by supported hooks, exposed as `/edgebase-goal ...` when a manual command is useful, and called through CLI/MCP before write tools run. `/goal ...` remains installed as a shorter compatibility alias. The same agent-facing paths also refresh optional local graph artifacts at `.edgebase/graphs/latest.html`, `.json`, and `.dot`; agents surface the paths without dumping raw graph data into context.
 
 Edgebase also keeps `AGENTS.md` small, indexes the repository into a rebuildable SQLite graph, and exposes MCP tools that agents can use before editing:
 
@@ -130,7 +130,7 @@ Rules:
 - Do not add generated architecture summaries to AGENTS.md.
 - Do not remove existing agent config.
 - Do not commit unless I explicitly ask.
-- Explain that Edgebase is on by default after setup, can be disabled with `python3 -m edgebase disable --scope both`, and can be bypassed for one emergency session with `EDGEBASE_PREFLIGHT=off`.
+- Explain that Edgebase is on by default after setup, can be disabled with `edgebase disable --scope both`, and can be bypassed for one emergency session with `EDGEBASE_PREFLIGHT=off`.
 ```
 
 If you are setting up a remote repository, change the target line:
@@ -151,7 +151,7 @@ python3 -m edgebase setup --scope both
 python3 -m edgebase doctor --scope both
 ```
 
-Edgebase is enabled by default after setup. Turn it off with `python3 -m edgebase disable --scope both`.
+Edgebase is enabled by default after setup. Turn it off with `edgebase disable --scope both`.
 
 To bypass only the edit gate for one emergency session without removing MCP config:
 
@@ -168,8 +168,8 @@ EDGEBASE_PREFLIGHT=off
 | Edgebase cache/artifacts | `.edgebase/index.sqlite3`, `.edgebase/graphs/latest.*` | none | Rebuildable local graph cache plus optional visual artifacts, ignored by git |
 | Git ignore | `.git/info/exclude` | none | Locally ignores `.edgebase/` without changing committed ignore files |
 | Agent instructions | `AGENTS.md` marker block | none | Tells agents to use Edgebase automatically for broad exploration/editing |
-| Claude Code | `.mcp.json`, `.claude/settings.json`, `.claude/skills/edgebase/SKILL.md`, `.claude/skills/goal/SKILL.md` | none by default | MCP server, automatic Goal Capsules, PreToolUse stale-capsule blocking, SessionStart/PostToolUse/PreCompact/SessionEnd hooks, `/edgebase` and `/goal` skills |
-| Codex | `.codex/config.toml`, `.codex/hooks.json`, `.agents/skills/edgebase/SKILL.md`, `.agents/skills/goal/SKILL.md` | `~/.codex/config.toml` | MCP server entry, project hook config, project skills, AGENTS.md routing |
+| Claude Code | `.mcp.json`, `.claude/settings.json`, `.claude/skills/edgebase/SKILL.md`, `.claude/skills/edgebase-goal/SKILL.md`, `.claude/skills/goal/SKILL.md` | none by default | MCP server, automatic Goal Capsules, PreToolUse stale-capsule blocking, SessionStart/PostToolUse/PreCompact/SessionEnd hooks, `/edgebase`, `/edgebase-goal`, and `/goal` skills |
+| Codex | `.codex/config.toml`, `.codex/hooks.json`, `.agents/skills/edgebase/SKILL.md`, `.agents/skills/edgebase-goal/SKILL.md`, `.agents/skills/goal/SKILL.md` | `~/.codex/config.toml` | MCP server entry, project hook config, project skills, AGENTS.md routing |
 | Cursor | `.cursor/mcp.json` | `~/.cursor/mcp.json` | MCP server entry |
 | Gemini CLI | `.gemini/settings.json` | `~/.gemini/settings.json` | MCP server entry |
 | OpenCode | `.opencode.json` | `~/.opencode.json` | Enabled local MCP server |
@@ -184,24 +184,31 @@ Setup uses the Python interpreter that ran setup, with `-m edgebase`, instead of
 
 Most users do not run Edgebase manually after setup.
 
-- Claude Code: `UserPromptSubmit` records and injects a Goal Capsule before planning. `PreToolUse` blocks Write/Edit/MultiEdit if no fresh capsule exists. `PostToolUse` refreshes the graph after edits. `PreCompact` saves a checkpoint, and `SessionEnd` saves a Patch Passport. Project skills `/edgebase <task>` and `/goal <goal>` are installed as explicit commands.
-- Codex: setup writes MCP config, project `.codex/hooks.json`, `[features] hooks = true`, `.agents/skills/edgebase`, `.agents/skills/goal`, and the `AGENTS.md` marker. Codex uses MCP plus project skills by default; when trusted hook support is active, the same preflight gate records capsules, blocks stale edits, refreshes after edits, checkpoints before compaction, and saves a Patch Passport on stop.
+- Claude Code: `UserPromptSubmit` records and injects a Goal Capsule before planning. `PreToolUse` blocks Write/Edit/MultiEdit if no fresh capsule exists. `PostToolUse` refreshes the graph after edits. `PreCompact` saves a checkpoint, and `SessionEnd` saves a Patch Passport. Project skills `/edgebase <task>` and `/edgebase-goal <goal>` are installed as explicit commands; `/goal <goal>` remains as a compatibility alias.
+- Codex: setup writes MCP config, project `.codex/hooks.json`, `[features] hooks = true`, `.agents/skills/edgebase`, `.agents/skills/edgebase-goal`, `.agents/skills/goal`, and the `AGENTS.md` marker. Codex uses MCP plus project skills by default; when trusted hook support is active, the same preflight gate records capsules, blocks stale edits, refreshes after edits, checkpoints before compaction, and saves a Patch Passport on stop.
 - Cursor, Gemini CLI, OpenCode, and Windsurf: Edgebase installs MCP config and a marker-bounded `AGENTS.md` instruction telling agents to use `edgebase_context` or `edgebase_goal` automatically before broad code exploration or edits. Those MCP calls update `.edgebase/graphs/latest.*` and return the artifact paths.
-- Any client: the MCP prompts named `edgebase` and `goal` are available for clients that expose MCP prompts or slash-command-style prompt menus.
+- Any client: the MCP prompts named `edgebase`, `edgebase-goal`, and `goal` are available for clients that expose MCP prompts or slash-command-style prompt menus.
 
-Useful manual commands:
+Useful explicit slash commands inside supported agent REPLs/apps:
+
+```text
+/edgebase "change the auth login flow"
+/edgebase-goal "add passwordless login without breaking OAuth"
+```
+
+Shell fallback and verification commands:
 
 ```bash
-python3 -m edgebase context "change the auth login flow" --budget 1200
-python3 -m edgebase goal "add passwordless login without breaking OAuth" --budget 1200
-python3 -m edgebase passport "add passwordless login without breaking OAuth" --test "python3 -m unittest -v: pass"
-python3 -m edgebase preflight status
-python3 -m edgebase checkpoint "handoff after auth refactor"
-python3 -m edgebase resume
-python3 -m edgebase index --changed
-python3 -m edgebase stats
-python3 -m edgebase doctor --scope both
-python3 -m edgebase disable --scope both
+edgebase context "change the auth login flow" --budget 1200
+edgebase goal "add passwordless login without breaking OAuth" --budget 1200
+edgebase passport "add passwordless login without breaking OAuth" --test "python3 -m unittest -v: pass"
+edgebase preflight status
+edgebase checkpoint "handoff after auth refactor"
+edgebase resume
+edgebase index --changed
+edgebase stats
+edgebase doctor --scope both
+edgebase disable --scope both
 ```
 
 ## What It Indexes
@@ -219,7 +226,7 @@ Dynamic-language call graphs are confidence-scored. Low-confidence call edges ar
 
 | Agent | Status | Notes |
 | --- | --- | --- |
-| Claude Code | Supported | Project `.mcp.json`; automatic UserPromptSubmit Goal Capsule; PreToolUse stale-capsule block; async PostToolUse refresh; PreCompact checkpoint; SessionEnd Patch Passport; `/edgebase` and `/goal` project skills |
+| Claude Code | Supported | Project `.mcp.json`; automatic UserPromptSubmit Goal Capsule; PreToolUse stale-capsule block; async PostToolUse refresh; PreCompact checkpoint; SessionEnd Patch Passport; `/edgebase`, `/edgebase-goal`, and `/goal` project skills |
 | Codex | Supported | Project `.codex/config.toml`, `.codex/hooks.json`, `.agents/skills`; global `~/.codex/config.toml` MCP entry for CLI discovery; verify with `codex mcp list` and `edgebase doctor` |
 | Cursor | Supported | Project and global `mcp.json`; Cursor says Composer Agent automatically uses relevant MCP tools |
 | Gemini CLI | Supported | Project and global `settings.json` with `mcpServers` |
@@ -257,7 +264,7 @@ Automation layers:
 This is not a separate graph UI or a new agent control surface; visualization is kept as a local artifact attached to the existing agent context flow.
 
 See [Architecture](docs/ARCHITECTURE.md) and [Validation](docs/VALIDATION.md).
-The latest release audit is documented in [Release Audit](docs/RELEASE_AUDIT_0.1.5.md).
+The latest release audit is documented in [Release Audit](docs/RELEASE_AUDIT_0.1.6.md).
 
 ## Benchmarks
 

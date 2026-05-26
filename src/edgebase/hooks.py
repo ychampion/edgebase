@@ -358,8 +358,9 @@ def deny_pre_tool_payload(event_name: str, reason: object) -> str:
                 "permissionDecision": "deny",
                 "permissionDecisionReason": (
                     "Edgebase blocked this edit because no fresh Goal Capsule exists. "
-                    f"Reason: {reason}. Run `edgebase goal \"<goal>\" --record-preflight`, use `/goal <goal>`, "
-                    "or submit a coding prompt so Edgebase can inject one automatically. Set EDGEBASE_PREFLIGHT=off only for emergency bypass."
+                    f"Reason: {reason}. Use `/edgebase-goal <goal>`, use `/goal <goal>`, "
+                    "run `edgebase goal \"<goal>\" --record-preflight`, or submit a coding prompt so Edgebase can inject one automatically. "
+                    "Set EDGEBASE_PREFLIGHT=off only for emergency bypass."
                 ),
             }
         }

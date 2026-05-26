@@ -150,6 +150,21 @@ class EdgebaseTests(unittest.TestCase):
             )
             self.assertEqual(data["goal"], "modify login")
 
+    def test_cli_version_flag_reports_package_version(self) -> None:
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+        proc = subprocess.run(
+            [sys.executable, "-m", "edgebase", "--version"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), f"edgebase {__version__}")
+
     def test_graph_export_model_and_static_artifacts(self) -> None:
         with sample_repo() as repo:
             index_repo(repo)
@@ -215,7 +230,10 @@ class EdgebaseTests(unittest.TestCase):
 
             prompts = server.handle({"jsonrpc": "2.0", "id": 3, "method": "prompts/list"})
             self.assertIsNotNone(prompts)
-            self.assertEqual([prompt["name"] for prompt in prompts["result"]["prompts"]], ["edgebase", "goal"])
+            self.assertEqual(
+                [prompt["name"] for prompt in prompts["result"]["prompts"]],
+                ["edgebase", "edgebase-goal", "goal"],
+            )
 
             called = server.handle(
                 {
@@ -283,6 +301,19 @@ class EdgebaseTests(unittest.TestCase):
             self.assertIn("executable work contract", goal_prompt_text)
             self.assertIn("Edgebase graph artifacts:", goal_prompt_text)
 
+            branded_goal_prompt = server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 7,
+                    "method": "prompts/get",
+                    "params": {"name": "edgebase-goal", "arguments": {"goal": "modify login"}},
+                }
+            )
+            self.assertIsNotNone(branded_goal_prompt)
+            branded_goal_prompt_text = branded_goal_prompt["result"]["messages"][0]["content"]["text"]
+            self.assertIn("# Edgebase Goal Capsule", branded_goal_prompt_text)
+            self.assertIn("executable work contract", branded_goal_prompt_text)
+
     def test_mcp_cli_accepts_root_after_subcommand(self) -> None:
         with sample_repo() as repo:
             env = os.environ.copy()
@@ -323,6 +354,7 @@ class EdgebaseTests(unittest.TestCase):
             self.assertTrue(agents_md.startswith("# Existing\n"))
             self.assertIn(AGENT_DOC_START, agents_md)
             self.assertIn("Do not wait for the user", agents_md)
+            self.assertIn("/edgebase-goal", agents_md)
 
             claude = json.loads((repo / ".mcp.json").read_text(encoding="utf-8"))
             self.assertIn("-m", claude["mcpServers"]["edgebase"]["args"])
@@ -337,6 +369,12 @@ class EdgebaseTests(unittest.TestCase):
             self.assertIn("name: goal", goal_skill)
             self.assertIn("edgebase_goal", goal_skill)
             self.assertIn(".edgebase/graphs/latest.*", goal_skill)
+
+            branded_goal_skill = (repo / ".claude" / "skills" / "edgebase-goal" / "SKILL.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("name: edgebase-goal", branded_goal_skill)
+            self.assertIn("edgebase_goal", branded_goal_skill)
 
             cursor = json.loads((repo / ".cursor" / "mcp.json").read_text(encoding="utf-8"))
             self.assertIn("edgebase", cursor["mcpServers"])
@@ -380,12 +418,42 @@ class EdgebaseTests(unittest.TestCase):
             self.assertIn("edgebase_goal", goal_skill)
             self.assertIn("--record-preflight", goal_skill)
 
+            branded_goal_skill = (repo / ".agents" / "skills" / "edgebase-goal" / "SKILL.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("name: edgebase-goal", branded_goal_skill)
+            self.assertIn("edgebase_goal", branded_goal_skill)
+            self.assertIn("--record-preflight", branded_goal_skill)
+
             checks = {check.name: check for check in run_doctor(repo, agents=["codex"], scope="project")}
             self.assertEqual(checks["Codex project config"].status, "ok")
             self.assertEqual(checks["Codex hooks feature"].status, "ok")
             self.assertEqual(checks["Codex hooks"].status, "ok")
             self.assertEqual(checks["Codex /edgebase skill"].status, "ok")
             self.assertEqual(checks["Codex /goal skill"].status, "ok")
+            self.assertEqual(checks["Codex /edgebase-goal skill"].status, "ok")
+
+    def test_codex_setup_skips_unmarked_existing_skills(self) -> None:
+        with sample_repo() as repo:
+            existing_skill = repo / ".agents" / "skills" / "edgebase-goal" / "SKILL.md"
+            existing_skill.parent.mkdir(parents=True, exist_ok=True)
+            existing_skill.write_text("# Existing custom skill\n", encoding="utf-8")
+
+            results = setup_repo(
+                repo,
+                agents=["codex"],
+                scope="project",
+                install_hooks=True,
+                write_agents_md=True,
+            )
+
+            skipped = [result for result in results if result.path == existing_skill]
+            self.assertEqual(len(skipped), 1)
+            self.assertEqual(skipped[0].action, "skipped")
+            self.assertIn("Refusing to overwrite existing Codex skill", skipped[0].detail)
+            self.assertEqual(existing_skill.read_text(encoding="utf-8"), "# Existing custom skill\n")
+            self.assertTrue((repo / ".agents" / "skills" / "edgebase" / "SKILL.md").exists())
+            self.assertTrue((repo / ".agents" / "skills" / "goal" / "SKILL.md").exists())
 
     def test_codex_hooks_merge_and_disable_preserve_unrelated_hooks(self) -> None:
         with sample_repo() as repo:
@@ -442,6 +510,8 @@ class EdgebaseTests(unittest.TestCase):
             self.assertNotIn("hooks", claude_hooks)
             self.assertFalse((repo / ".claude" / "skills" / "edgebase" / "SKILL.md").exists())
             self.assertFalse((repo / ".claude" / "skills" / "goal" / "SKILL.md").exists())
+            self.assertFalse((repo / ".claude" / "skills" / "edgebase-goal" / "SKILL.md").exists())
+            self.assertFalse((repo / ".agents" / "skills" / "edgebase-goal" / "SKILL.md").exists())
 
     def test_claude_prompt_hook_injects_context_for_coding_prompts(self) -> None:
         with sample_repo() as repo:
@@ -459,6 +529,7 @@ class EdgebaseTests(unittest.TestCase):
             self.assertEqual(checks["Claude Code hooks"].status, "ok")
             self.assertEqual(checks["Claude Code /edgebase skill"].status, "ok")
             self.assertEqual(checks["Claude Code /goal skill"].status, "ok")
+            self.assertEqual(checks["Claude Code /edgebase-goal skill"].status, "ok")
 
             old_stdin = sys.stdin
             stdout = io.StringIO()

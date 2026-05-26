@@ -22,6 +22,13 @@ Current support:
 - Cursor, Gemini CLI, OpenCode, Windsurf: MCP-first setup
 - One pasteable agent prompt for setup
 
+Explicit commands are available when a client exposes project skills or MCP prompts:
+
+```text
+/edgebase "what should I read before this change?"
+/edgebase-goal "ship this feature without breaking the nearby tests"
+```
+
 The goal is narrow: reduce wasted search/read calls without lowering patch quality.
 
 Repo: https://github.com/ychampion/edgebase
@@ -43,6 +50,6 @@ It gives coding agents fresh, source-backed context before they edit:
 
 Local-first. Git-native. No Docker, cloud, API key, or graph DB.
 
-Claude Code gets hooks. Codex gets MCP + project hooks/skills. Other agents get MCP.
+Claude Code gets hooks. Codex gets MCP + project hooks/skills. Other agents get MCP. Slash-capable clients get `/edgebase` and `/edgebase-goal`.
 
 Repo: https://github.com/ychampion/edgebase

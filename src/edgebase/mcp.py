@@ -148,6 +148,7 @@ class McpServer:
                     {
                         "prompts": [
                             {"name": "edgebase", "title": "Edgebase Context", "description": "Fetch source-backed codebase context before editing.", "arguments": [{"name": "task", "required": True}, {"name": "budget", "required": False}]},
+                            {"name": "edgebase-goal", "title": "Edgebase Goal Capsule", "description": "Fetch an executable Goal Capsule and Work Contract before editing.", "arguments": [{"name": "goal", "required": True}, {"name": "budget", "required": False}]},
                             {"name": "goal", "title": "Edgebase Goal Capsule", "description": "Fetch an executable Goal Capsule and Work Contract before editing.", "arguments": [{"name": "goal", "required": True}, {"name": "budget", "required": False}]},
                         ]
                     },
@@ -167,11 +168,11 @@ class McpServer:
                     artifacts = safe_write_graph_artifacts(self.root, task, [], capsule.selected_files)
                     text = append_optional_section(capsule.markdown, graph_artifact_summary(artifacts)) + "\n\nUse this Edgebase context as the first read set before broad exploration or edits."
                     description = "Edgebase source-backed context capsule."
-                elif name == "goal":
+                elif name in {"edgebase-goal", "goal"}:
                     goal = str(args.get("goal") or args.get("task") or "").strip()
                     if not goal:
                         return self._error(request_id, -32602, "`goal` is required")
-                    capsule = prepare_goal_capsule(self.root, goal, [], budget, source="mcp-prompt-goal")
+                    capsule = prepare_goal_capsule(self.root, goal, [], budget, source=f"mcp-prompt-{name}")
                     text = append_optional_section(capsule.markdown, graph_artifact_summary(capsule.graph_artifacts)) + "\n\nUse this Goal Capsule as the executable work contract before editing."
                     description = "Edgebase executable Goal Capsule."
                 else:

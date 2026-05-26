@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.1.6 - 2026-05-26
+
+### Added
+
+- Branded `/edgebase-goal <goal>` project skills for Claude Code and Codex, plus an `edgebase-goal` MCP prompt for clients that expose prompt menus.
+- Doctor checks and setup coverage for the new branded Goal Capsule command.
+- `edgebase --version` for quick installed-version checks.
+
+### Changed
+
+- `/goal <goal>` remains installed as a compatibility alias, while docs now lead with `/edgebase-goal` to make the command easier to associate with Edgebase.
+- Codex setup now skips unmarked existing project skills instead of aborting setup, matching the existing Claude Code preservation behavior.
+
 ## 0.1.5 - 2026-05-26
 
 ### Added

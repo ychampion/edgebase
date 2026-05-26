@@ -39,7 +39,7 @@ Rules:
 - Do not add generated architecture summaries to AGENTS.md.
 - Do not remove existing agent config.
 - Do not commit unless I explicitly ask.
-- Explain that Edgebase is on by default after setup, can be disabled with `python3 -m edgebase disable --scope both`, and can be bypassed for one emergency session with `EDGEBASE_PREFLIGHT=off`.
+- Explain that Edgebase is on by default after setup, can be disabled with `edgebase disable --scope both`, and can be bypassed for one emergency session with `EDGEBASE_PREFLIGHT=off`.
 ```
 
 ## What The Agent Should Report Back
@@ -50,6 +50,7 @@ The agent should report:
 - whether `edgebase doctor --scope both` passed
 - which config files were created or updated
 - whether Claude Code and Codex hooks were installed
+- that `/edgebase` and `/edgebase-goal` are available after restarting supported clients
 - how to disable Edgebase
 - whether the user needs to restart the agent or IDE
 
@@ -63,10 +64,12 @@ Depending on installed clients and setup scope, Edgebase may create or update:
 - `.mcp.json`
 - `.claude/settings.json`
 - `.claude/skills/edgebase/SKILL.md`
+- `.claude/skills/edgebase-goal/SKILL.md`
 - `.claude/skills/goal/SKILL.md`
 - `.codex/config.toml`
 - `.codex/hooks.json`
 - `.agents/skills/edgebase/SKILL.md`
+- `.agents/skills/edgebase-goal/SKILL.md`
 - `.agents/skills/goal/SKILL.md`
 - `.cursor/mcp.json`
 - `.gemini/settings.json`
@@ -77,10 +80,17 @@ Depending on installed clients and setup scope, Edgebase may create or update:
 
 Most users do not need to run Edgebase manually. Supported hooks and MCP config make agents fetch or record fresh source-backed context before broad exploration or edits.
 
+Explicit slash commands are available in Claude Code, Codex, and clients that expose MCP prompts:
+
+```text
+/edgebase "implement password reset"
+/edgebase-goal "implement password reset without regressing login"
+```
+
 Manual checks remain available:
 
 ```bash
-python3 -m edgebase doctor --scope both
-python3 -m edgebase preflight status
-python3 -m edgebase disable --scope both
+edgebase doctor --scope both
+edgebase preflight status
+edgebase disable --scope both
 ```

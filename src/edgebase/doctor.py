@@ -11,7 +11,9 @@ from .git import find_repo_root
 from .indexer import index_repo
 from .setup import (
     CLAUDE_GOAL_SKILL_START,
+    CLAUDE_EDGEBASE_GOAL_SKILL_START,
     CLAUDE_SKILL_START,
+    CODEX_EDGEBASE_GOAL_SKILL_START,
     CODEX_GOAL_SKILL_START,
     CODEX_SKILL_START,
     normalize_agents,
@@ -118,12 +120,26 @@ def agent_config_checks(repo_root: Path, agents: set[str], scope: str) -> list[C
                 "Claude Code /goal skill",
             )
         )
+        checks.append(
+            text_contains_check(
+                repo_root / ".claude" / "skills" / "edgebase-goal" / "SKILL.md",
+                CLAUDE_EDGEBASE_GOAL_SKILL_START,
+                "Claude Code /edgebase-goal skill",
+            )
+        )
     if "codex" in agents and scope in {"project", "both"}:
         checks.append(text_contains_check(repo_root / ".codex" / "config.toml", "[mcp_servers.edgebase]", "Codex project config"))
         checks.append(text_contains_check(repo_root / ".codex" / "config.toml", "hooks = true", "Codex hooks feature"))
         checks.append(codex_hooks_check(repo_root / ".codex" / "hooks.json"))
         checks.append(text_contains_check(repo_root / ".agents" / "skills" / "edgebase" / "SKILL.md", CODEX_SKILL_START, "Codex /edgebase skill"))
         checks.append(text_contains_check(repo_root / ".agents" / "skills" / "goal" / "SKILL.md", CODEX_GOAL_SKILL_START, "Codex /goal skill"))
+        checks.append(
+            text_contains_check(
+                repo_root / ".agents" / "skills" / "edgebase-goal" / "SKILL.md",
+                CODEX_EDGEBASE_GOAL_SKILL_START,
+                "Codex /edgebase-goal skill",
+            )
+        )
     if "codex" in agents and scope in {"global", "both"}:
         checks.append(
             text_contains_check(Path.home() / ".codex" / "config.toml", "[mcp_servers.edgebase]", "Codex global config")
