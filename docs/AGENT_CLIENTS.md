@@ -10,35 +10,55 @@ edgebase_fork_plan(message, from_id?, branch?, path?, allow_dirty?, budget?)
 edgebase_resume(snapshot_id?)
 ```
 
-The normal installation path is:
+The normal installation path is a prompt, not a command the user has to run manually. Paste this into the coding agent that is already working in the repository:
 
-```bash
-python3 -m pip install --user git+https://github.com/ychampion/edgebase.git && python3 -m edgebase setup --scope both
+```text
+Set up Edgebase in this repo: current working directory. Install it from https://github.com/ychampion/edgebase, run the local setup and doctor checks yourself, preserve existing agent config, do not commit, and report exactly what changed.
 ```
 
-Default state after setup: **on** for selected agents. Turn it off with:
+For stricter setup, paste the full prompt:
+
+```text
+Set up Edgebase for this repository.
+
+Repository target: current working directory.
+
+Do the setup yourself. Do not ask me to run `edgebase setup` manually.
+
+Steps:
+1. Confirm you are inside a git repository. If I gave you a repository URL instead of a local repo, clone it first and cd into it.
+2. Run:
+   python3 -m pip install --user --upgrade git+https://github.com/ychampion/edgebase.git
+3. Run:
+   python3 -m edgebase setup --scope both
+4. Run:
+   python3 -m edgebase doctor --scope both
+5. Report the files Edgebase changed and whether doctor passed.
+
+Rules:
+- Do not add generated architecture summaries to AGENTS.md.
+- Do not remove existing agent config.
+- Do not commit unless I explicitly ask.
+- Explain that Edgebase is on by default after setup, can be disabled with `python3 -m edgebase disable --scope both`, and can be bypassed for one emergency session with `EDGEBASE_PREFLIGHT=off`.
+```
+
+For a remote repository, replace the target line with `Repository target: https://github.com/OWNER/REPO`.
+
+Default state after setup: **on** for selected agents. The manual fallback commands are:
+
+```bash
+python3 -m pip install --user --upgrade git+https://github.com/ychampion/edgebase.git
+python3 -m edgebase setup --scope both
+python3 -m edgebase doctor --scope both
+```
+
+Turn it off with:
 
 ```bash
 python3 -m edgebase disable --scope both
 ```
 
-Check the local installation:
-
-```bash
-python3 -m edgebase doctor --scope both
-```
-
-## Prompt To Paste Into Agents
-
-```text
-Install Edgebase for this repository. Run:
-python3 -m pip install --user git+https://github.com/ychampion/edgebase.git && python3 -m edgebase setup --scope both
-
-Explain the changes before you make unrelated edits. After setup, verify with:
-python3 -m edgebase doctor --scope both
-
-Do not add generated architecture summaries to AGENTS.md. Edgebase keeps AGENTS.md minimal, installs MCP server config, and enables automatic context routing where the agent client supports it.
-```
+See [Universal Agent Install Prompt](UNIVERSAL_AGENT_PROMPT.md) for a standalone copy/paste prompt.
 
 ## What Edgebase Changes
 

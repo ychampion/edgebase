@@ -75,46 +75,64 @@ Modern coding agents are good at exploring code, but their default exploration l
 
 Flat instruction files such as `AGENTS.md`, `CLAUDE.md`, and Cursor rules are still useful for human-written project rules. They are a poor place for generated code structure. Edgebase complements those files by keeping generated structure in a local cache and serving fresh context on demand.
 
-## Install
+## Install With Any Agent
 
-Run this from the repository you want agents to understand:
+Paste this into Claude Code, Codex, Cursor, Gemini CLI, OpenCode, Windsurf, or any coding agent with shell access:
 
-```bash
-python3 -m pip install --user git+https://github.com/ychampion/edgebase.git && python3 -m edgebase setup --scope both
+```text
+Set up Edgebase in this repo: current working directory. Install it from https://github.com/ychampion/edgebase, run the local setup and doctor checks yourself, preserve existing agent config, do not commit, and report exactly what changed.
 ```
 
-Then restart your agent or IDE.
+For stricter setup, paste the full prompt:
 
-Edgebase is enabled by default after setup. To turn it off:
+```text
+Set up Edgebase for this repository.
 
-```bash
-python3 -m edgebase disable --scope both
+Repository target: current working directory.
+
+Do the setup yourself. Do not ask me to run `edgebase setup` manually.
+
+Steps:
+1. Confirm you are inside a git repository. If I gave you a repository URL instead of a local repo, clone it first and cd into it.
+2. Run:
+   python3 -m pip install --user --upgrade git+https://github.com/ychampion/edgebase.git
+3. Run:
+   python3 -m edgebase setup --scope both
+4. Run:
+   python3 -m edgebase doctor --scope both
+5. Report the files Edgebase changed and whether doctor passed.
+
+Rules:
+- Do not add generated architecture summaries to AGENTS.md.
+- Do not remove existing agent config.
+- Do not commit unless I explicitly ask.
+- Explain that Edgebase is on by default after setup, can be disabled with `python3 -m edgebase disable --scope both`, and can be bypassed for one emergency session with `EDGEBASE_PREFLIGHT=off`.
 ```
 
-To check the installation:
+If you are setting up a remote repository, change the target line:
+
+```text
+Repository target: https://github.com/OWNER/REPO
+```
+
+Then paste the same prompt.
+
+See [Universal Agent Install Prompt](docs/UNIVERSAL_AGENT_PROMPT.md) for a copy/paste version with client-specific verification notes.
+
+Manual fallback, from inside the repo:
 
 ```bash
+python3 -m pip install --user --upgrade git+https://github.com/ychampion/edgebase.git
+python3 -m edgebase setup --scope both
 python3 -m edgebase doctor --scope both
 ```
+
+Edgebase is enabled by default after setup. Turn it off with `python3 -m edgebase disable --scope both`.
 
 To bypass only the edit gate for one emergency session without removing MCP config:
 
 ```bash
 EDGEBASE_PREFLIGHT=off
-```
-
-## Paste This Into Your Agent
-
-If you want Claude Code, Codex, Cursor, Gemini CLI, OpenCode, or Windsurf to install it for you, paste:
-
-```text
-Install Edgebase for this repository. Run:
-python3 -m pip install --user git+https://github.com/ychampion/edgebase.git && python3 -m edgebase setup --scope both
-
-After setup, restart if needed and verify with:
-python3 -m edgebase doctor --scope both
-
-Do not add generated architecture summaries to AGENTS.md. Edgebase keeps AGENTS.md minimal, installs MCP server config, and enables automatic context routing where the agent client supports it.
 ```
 
 ## What Setup Changes

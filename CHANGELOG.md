@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.4 - 2026-05-26
+
+### Changed
+
+- README and agent-client docs now lead with a universal paste-into-any-agent install prompt instead of a human-run `edgebase setup` command.
+- Added `docs/UNIVERSAL_AGENT_PROMPT.md` as the standalone install prompt for Claude Code, Codex, Cursor, Gemini CLI, OpenCode, Windsurf, and other shell-capable coding agents.
+
 ## 0.1.3 - 2026-05-26
 
 ### Added
