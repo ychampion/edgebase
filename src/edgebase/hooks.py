@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import os
 import sys
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, Iterable
 
 from .commands import shell_join
-from .git import changed_files, find_repo_root, is_git_repo
+from .git import changed_files, find_repo_root, is_git_repo, run_git
 from .goal import render_edit_delta
 from .graph import graph_artifact_summary, write_graph_artifacts
 from .indexer import index_repo
@@ -19,45 +20,79 @@ from .preflight import (
     save_patch_passport,
     update_after_edit,
 )
+from .runtime import load_active_goal
 from .store import Store
 
 
+GIT_HOOK_NAMES = ("post-commit", "post-checkout", "post-merge", "post-rewrite")
+
+
 def install_git_hook(root: str | Path) -> Path:
+    return install_git_hooks(root)[0]
+
+
+def install_git_hooks(root: str | Path) -> list[Path]:
     repo_root = find_repo_root(root)
     if not is_git_repo(repo_root):
         raise RuntimeError(f"Not a git repository: {repo_root}")
-    hook_path = repo_root / ".git" / "hooks" / "post-commit"
-    marker = "# edgebase post-commit hook"
-    command = f"\n{marker}\n{hook_command(repo_root, 'git-post-commit')}\n"
-    existing = hook_path.read_text(encoding="utf-8") if hook_path.exists() else "#!/bin/sh\n"
-    if marker not in existing:
-        hook_path.write_text(existing.rstrip() + command, encoding="utf-8")
-        hook_path.chmod(0o755)
-    return hook_path
+    paths: list[Path] = []
+    for hook_name in GIT_HOOK_NAMES:
+        hook_path = git_hook_path(repo_root, hook_name)
+        marker = f"# edgebase {hook_name} hook"
+        command = f"\n{marker}\n{hook_command(repo_root, 'git-refresh')}\n"
+        existing = hook_path.read_text(encoding="utf-8") if hook_path.exists() else "#!/bin/sh\n"
+        if marker not in existing:
+            hook_path.write_text(existing.rstrip() + command, encoding="utf-8")
+            hook_path.chmod(0o755)
+        paths.append(hook_path)
+    return paths
 
 
 def uninstall_git_hook(root: str | Path) -> Path:
+    paths = uninstall_git_hooks(root)
+    return paths[0] if paths else git_hook_path(find_repo_root(root), "post-commit")
+
+
+def uninstall_git_hooks(root: str | Path) -> list[Path]:
     repo_root = find_repo_root(root)
-    hook_path = repo_root / ".git" / "hooks" / "post-commit"
-    if not hook_path.exists():
-        return hook_path
-    lines = hook_path.read_text(encoding="utf-8").splitlines()
-    filtered: list[str] = []
-    skip_next = False
-    for line in lines:
-        if skip_next:
-            skip_next = False
+    paths: list[Path] = []
+    for hook_name in GIT_HOOK_NAMES:
+        hook_path = git_hook_path(repo_root, hook_name)
+        paths.append(hook_path)
+        if not hook_path.exists():
             continue
-        if line.strip() == "# edgebase post-commit hook":
-            skip_next = True
-            continue
-        filtered.append(line)
-    hook_path.write_text("\n".join(filtered).rstrip() + "\n", encoding="utf-8")
-    return hook_path
+        lines = hook_path.read_text(encoding="utf-8").splitlines()
+        filtered: list[str] = []
+        skip_next = False
+        for line in lines:
+            if skip_next:
+                skip_next = False
+                continue
+            if line.strip() == f"# edgebase {hook_name} hook":
+                skip_next = True
+                continue
+            filtered.append(line)
+        hook_path.write_text("\n".join(filtered).rstrip() + "\n", encoding="utf-8")
+    return paths
 
 
-def hook_entry(repo_root: Path, hook_name: str, matcher: str | None = None, timeout: int = 30, asynchronous: bool = False) -> dict[str, object]:
-    command: dict[str, object] = {"type": "command", "command": hook_command(repo_root, hook_name), "timeout": timeout}
+def git_hook_path(repo_root: Path, hook_name: str) -> Path:
+    proc = run_git(repo_root, ["rev-parse", "--git-path", f"hooks/{hook_name}"], timeout=3)
+    if proc and proc.returncode == 0 and proc.stdout.strip():
+        path = Path(proc.stdout.strip())
+        return path if path.is_absolute() else repo_root / path
+    return repo_root / ".git" / "hooks" / hook_name
+
+
+def hook_entry(
+    repo_root: Path,
+    hook_name: str,
+    matcher: str | None = None,
+    timeout: int = 30,
+    asynchronous: bool = False,
+    strict: bool = False,
+) -> dict[str, object]:
+    command: dict[str, object] = {"type": "command", "command": hook_command(repo_root, hook_name, strict=strict), "timeout": timeout}
     if asynchronous:
         command["async"] = True
     entry: dict[str, object] = {"hooks": [command]}
@@ -66,7 +101,7 @@ def hook_entry(repo_root: Path, hook_name: str, matcher: str | None = None, time
     return entry
 
 
-def install_claude_hooks(root: str | Path) -> Path:
+def install_claude_hooks(root: str | Path, strict: bool = False) -> Path:
     repo_root = Path(root).resolve()
     settings_path = repo_root / ".claude" / "settings.json"
     settings_path.parent.mkdir(parents=True, exist_ok=True)
@@ -82,7 +117,7 @@ def install_claude_hooks(root: str | Path) -> Path:
     pre_tool = hooks.setdefault("PreToolUse", [])
     post_tool = hooks.setdefault("PostToolUse", [])
     for matcher in ("Write", "Edit", "MultiEdit"):
-        append_unique(pre_tool, hook_entry(repo_root, "claude-pre-tool-use", matcher=matcher))
+        append_unique(pre_tool, hook_entry(repo_root, "claude-pre-tool-use", matcher=matcher, strict=strict))
         append_unique(post_tool, hook_entry(repo_root, "claude-post-tool-use", matcher=matcher, timeout=60, asynchronous=True))
     append_unique(hooks.setdefault("PreCompact", []), hook_entry(repo_root, "claude-pre-compact"))
     append_unique(hooks.setdefault("SessionEnd", []), hook_entry(repo_root, "claude-session-end"))
@@ -236,8 +271,11 @@ def codex_hook_runs_edgebase(entry: object) -> bool:
     return isinstance(entry, str) and "edgebase hooks codex-" in entry
 
 
-def hook_command(repo_root: Path, hook_name: str) -> str:
-    return shell_join([sys.executable, "-m", "edgebase", "hooks", hook_name, "--root", str(repo_root)])
+def hook_command(repo_root: Path, hook_name: str, strict: bool = False) -> str:
+    parts = [sys.executable, "-m", "edgebase", "hooks", hook_name, "--root", str(repo_root)]
+    if strict:
+        parts.append("--strict")
+    return shell_join(parts)
 
 
 def uninstall_claude_hooks(root: str | Path) -> Path:
@@ -322,6 +360,10 @@ def safe_graph_artifact_summary(root: str | Path, task: str | None, changed: lis
 
 
 def handle_git_post_commit(root: str | Path) -> int:
+    return handle_git_refresh(root)
+
+
+def handle_git_refresh(root: str | Path) -> int:
     result = index_repo(root)
     print(f"edgebase indexed {result.files} files at {result.commit_sha}")
     return 0
@@ -358,7 +400,7 @@ def handle_claude_user_prompt_submit(root: str | Path) -> int:
     return 0
 
 
-def handle_claude_pre_tool_use(root: str | Path) -> int:
+def handle_claude_pre_tool_use(root: str | Path, strict: bool = False) -> int:
     payload = read_json_stdin()
     if preflight_disabled() or not is_edit_tool(payload):
         return 0
@@ -366,7 +408,26 @@ def handle_claude_pre_tool_use(root: str | Path) -> int:
     touched = extract_tool_paths(payload, repo_root)
     fresh, status = ensure_fresh_preflight(repo_root, touched, budget=900)
     if not fresh:
-        print(deny_pre_tool_payload("PreToolUse", status.get("reason") or "Goal Capsule is stale"))
+        reason = status.get("reason") or "Goal Capsule is stale"
+        if strict:
+            print(deny_pre_tool_payload("PreToolUse", reason))
+        else:
+            msg = (
+                "Edgebase pre-edit warning: "
+                f"{reason}. Run `/edgebase-goal <goal>` or `edgebase goal \"<goal>\" --record` "
+                "to refresh the active Work Contract before editing."
+            )
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": msg}}))
+        return 0
+    state = load_active_goal(repo_root) or {}
+    warnings = contract_warnings(touched, state)
+    protected = protected_path_warnings(touched, state)
+    if warnings:
+        if strict and protected:
+            print(deny_pre_tool_payload("PreToolUse", "; ".join(protected)))
+        else:
+            msg = "Edgebase Work Contract warning: " + " ".join(warnings)
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": msg}}))
     return 0
 
 
@@ -456,7 +517,7 @@ def should_inject_prompt_context(prompt: str) -> bool:
         return False
     if text in {"ok", "okay", "yes", "no", "thanks", "thank you", "continue", "go on", "sounds good"}:
         return False
-    hints = ("add", "build", "change", "debug", "error", "fail", "fix", "implement", "install", "migrate", "refactor", "remove", "rename", "review", "test", "update", "where", "why")
+    hints = ("add", "build", "change", "debug", "error", "fail", "fix", "implement", "install", "migrate", "modify", "refactor", "remove", "rename", "review", "test", "update", "where", "why")
     return any(hint in text for hint in hints) or len(text.split()) >= 6
 
 
@@ -471,11 +532,13 @@ def is_edit_tool(payload: dict[str, Any]) -> bool:
 def deny_pre_tool_payload(event_name: str, reason: object) -> str:
     return json.dumps(
         {
+            "permissionDecision": "deny",
+            "permissionDecisionReason": f"Edgebase blocked this edit. Reason: {reason}.",
             "hookSpecificOutput": {
                 "hookEventName": event_name,
                 "permissionDecision": "deny",
                 "permissionDecisionReason": (
-                    "Edgebase blocked this edit because no fresh Goal Capsule exists. "
+                    "Edgebase blocked this edit. "
                     f"Reason: {reason}. Use `/edgebase-goal <goal>`, `/edgebase-preflight-refresh <goal>`, or `/goal <goal>`, "
                     "or submit a coding prompt so Edgebase can inject one automatically. "
                     "Set EDGEBASE_PREFLIGHT=off only for emergency bypass."
@@ -517,3 +580,43 @@ def extract_tool_paths(payload: dict[str, Any], root: str | Path | None = None) 
         except ValueError:
             rels.append(path.name)
     return sorted(set(rels))
+
+
+def contract_warnings(touched: list[str], state: dict[str, Any]) -> list[str]:
+    warnings: list[str] = []
+    if not state.get("goal"):
+        warnings.append("No active Work Contract is recorded.")
+    if not touched:
+        warnings.append("Edit target was not available in the hook payload; verify the active Work Contract before editing.")
+        return warnings
+    warnings.extend(protected_path_warnings(touched, state))
+    blast = [normalize_rel(path) for path in state.get("blast_radius") or [] if isinstance(path, str)]
+    if blast:
+        blast_set = set(blast)
+        outside = [path for path in touched if normalize_rel(path) not in blast_set]
+        if outside:
+            warnings.append("Edit target outside blast radius: " + ", ".join(outside) + ".")
+    return warnings
+
+
+def protected_path_warnings(touched: list[str], state: dict[str, Any]) -> list[str]:
+    protected = [str(path) for path in state.get("must_not_touch") or [] if str(path).strip()]
+    matches: list[str] = []
+    for path in touched:
+        normalized = normalize_rel(path)
+        for pattern in protected:
+            if protected_match(normalized, pattern):
+                matches.append(f"Edit target matches protected path `{pattern}`: {path}.")
+                break
+    return matches
+
+
+def protected_match(path: str, pattern: str) -> bool:
+    normalized_pattern = normalize_rel(pattern)
+    if " " in normalized_pattern and "/" not in normalized_pattern and "*" not in normalized_pattern:
+        return False
+    return fnmatch(path, normalized_pattern) or path == normalized_pattern.rstrip("/")
+
+
+def normalize_rel(path: str) -> str:
+    return path.replace("\\", "/").lstrip("./")

@@ -164,6 +164,20 @@ def agent_config_checks(repo_root: Path, agents: set[str], scope: str) -> list[C
         checks.append(
             text_contains_check(Path.home() / ".codex" / "config.toml", "[mcp_servers.edgebase]", "Codex global config")
         )
+        checks.append(
+            text_contains_check(
+                Path.home() / ".codex" / "skills" / "edgebase" / "SKILL.md",
+                CODEX_SKILL_START,
+                "Codex global /edgebase skill",
+            )
+        )
+        checks.append(
+            text_contains_check(
+                Path.home() / ".codex" / "skills" / "goal" / "SKILL.md",
+                CODEX_GOAL_SKILL_START,
+                "Codex global /goal skill",
+            )
+        )
     if "cursor" in agents and scope in {"project", "both"}:
         checks.append(json_mcp_check(repo_root / ".cursor" / "mcp.json", "Cursor project config"))
     if "cursor" in agents and scope in {"global", "both"}:

@@ -17,6 +17,8 @@ context ranker
         v
 edgebase_context(task, changed_files?, budget?)
 edgebase_goal(goal, changed_files?, budget?)
+edgebase_status()
+edgebase_finish(goal, tests?)
 edgebase_checkpoint(message, budget?)
 edgebase_fork_plan(message, from_id?, branch?, path?, allow_dirty?, budget?)
 edgebase_resume(snapshot_id?)
@@ -67,6 +69,21 @@ Current extractors are deliberately conservative:
 
 Dynamic call edges are not presented as facts. They are low-confidence leads unless the extractor can prove more.
 
+## Runtime State
+
+The active work contract is persisted under `.edgebase/session/active-goal.json`. It is local cache state, ignored by git, and contains the current goal, Work Contract, commit, worktree fingerprint, blast radius, required checks, stale files, recorded tests, and timestamps.
+
+`edgebase status` reads that active state plus git/index freshness and reports:
+
+- active goal
+- changed files and stale files
+- blast-radius drift
+- elevated tests
+- required checks not yet recorded
+- latest checkpoint and Patch Passport paths
+
+`edgebase finish "<goal>" --test "command: pass"` writes `.edgebase/passports/latest.md` and `.json`. It records only explicit test evidence, then separates inferred required checks from tests actually recorded.
+
 ## Freshness
 
 Freshness is checked with file hashes, git HEAD, the working tree fingerprint, and a short-lived preflight state file. A context or goal capsule reports stale files when the working tree no longer matches the indexed hash. A preflight capsule is considered stale when it expires, HEAD changes, the working tree changes after recording, or the index reports stale files.
@@ -75,9 +92,9 @@ Freshness paths:
 
 - `edgebase index`: full rebuild.
 - `edgebase index --changed`: incremental refresh for git-changed files.
-- Git `post-commit` hook: refresh after commits.
+- Git `post-commit`, `post-checkout`, `post-merge`, and `post-rewrite` hooks: refresh after commits, branch switches, merges, and rewrites.
 - Claude Code and Codex `UserPromptSubmit` hooks: record and inject a Goal Capsule before the agent plans.
-- Claude Code and Codex `PreToolUse` hooks: block Write/Edit/MultiEdit when no fresh Goal Capsule exists.
+- Claude Code and Codex `PreToolUse` hooks: warn before Write/Edit/MultiEdit when no fresh active contract exists, the target is outside blast radius, or the target is protected. Claude strict setup can deny missing/stale contracts and protected-path edits.
 - Claude Code and Codex `PostToolUse` hooks: async refresh, edit-delta reporting, and graph artifact update after Write/Edit/MultiEdit.
 - Claude Code `PreCompact` and Codex `PreCompact` hooks: save `.edgebase/checkpoints/latest.md` before compaction.
 - Claude Code `SessionEnd` and Codex `Stop` hooks: save `.edgebase/passports/latest.md` and `.json`.
@@ -111,7 +128,7 @@ The returned capsule includes:
 - stable `repo_commit` and `worktree_fingerprint`.
 - read-first files, blast radius, protected areas, tests, risks, uncertainties, and provenance.
 
-`edgebase passport` runs after edits and produces a Patch Passport from the current diff plus explicit test evidence. Edgebase records only tests supplied with `--test`; it never infers that a check passed.
+`edgebase passport` renders a Patch Passport from the current diff plus explicit test evidence. `edgebase finish` is the runtime finishing gate: it writes the latest Markdown/JSON passport and updates the active state with recorded tests. Edgebase records only tests supplied with `--test`; it never infers that a check passed.
 
 `edgebase checkpoint`, `edgebase fork-plan`, and `edgebase resume` preserve compact context across compaction, handoff, and git worktree branching. They reuse the context ranker rather than adding a separate memory store.
 
@@ -139,15 +156,17 @@ Claude Code has documented prompt and tool hooks, so Edgebase provides:
 
 - `UserPromptSubmit`: Goal Capsule before Claude plans.
 - `SessionStart`: freshness summary when a session opens.
-- `PreToolUse`: stale-capsule block before Write/Edit/MultiEdit.
+- `PreToolUse`: Work Contract warnings before Write/Edit/MultiEdit, with opt-in strict denial.
 - `PostToolUse`: async refresh and edit delta after Write/Edit/MultiEdit.
 - `PreCompact`: context checkpoint before compaction.
 - `SessionEnd`: Patch Passport at session end.
 - project skill `/edgebase <task>` for explicit manual refresh.
 - project skill `/edgebase-goal <goal>` for explicit Goal Capsules, with `/goal <goal>` as a compatibility alias.
-- project skills for operational commands such as `/edgebase-radius`, `/edgebase-checkpoint`, `/edgebase-resume`, `/edgebase-fork-plan`, `/edgebase-passport`, `/edgebase-preflight-status`, `/edgebase-preflight-refresh`, `/edgebase-index`, `/edgebase-stats`, `/edgebase-doctor`, `/edgebase-setup`, `/edgebase-disable`, and `/edgebase-version`.
+- project skills for operational commands such as `/edgebase-radius`, `/edgebase-status`, `/edgebase-finish`, `/edgebase-checkpoint`, `/edgebase-resume`, `/edgebase-fork-plan`, `/edgebase-passport`, `/edgebase-preflight-status`, `/edgebase-preflight-refresh`, `/edgebase-index`, `/edgebase-stats`, `/edgebase-doctor`, `/edgebase-setup`, `/edgebase-disable`, and `/edgebase-version`.
 
-Codex setup is MCP plus project-scoped hooks and skills. Edgebase writes `.codex/config.toml`, `[features] hooks = true`, `.codex/hooks.json`, `.agents/skills/edgebase`, `.agents/skills/edgebase-goal`, `.agents/skills/goal`, and the same `/edgebase-*` operational command skills. When project hooks are trusted, Codex receives the same preflight gate: prompt-time capsule, stale edit block, post-edit refresh, pre-compact checkpoint, and stop-time Patch Passport.
+Codex setup is MCP plus project-scoped hooks and skills. Edgebase writes `.codex/config.toml`, `[features] hooks = true`, `.codex/hooks.json`, `.agents/skills/edgebase`, `.agents/skills/edgebase-goal`, `.agents/skills/goal`, and the same `/edgebase-*` operational command skills. Global setup also installs `~/.codex/skills/edgebase*` and `~/.codex/skills/goal`. When project hooks are trusted, Codex receives the same runtime shape: prompt-time capsule, Work Contract check, post-edit refresh, pre-compact checkpoint, and stop-time Patch Passport.
+
+Team mode is intentionally lightweight. `edgebase team init optional` writes marker-bounded repo guidance that Edgebase is recommended. `edgebase team init required` adds marker-bounded guidance plus a Claude pre-tool enforcement hook that blocks broad edits if Edgebase is not installed or enabled. `edgebase team disable` removes only Edgebase-owned team guidance and hook entries.
 
 Cursor, Gemini CLI, OpenCode, and Windsurf are MCP-first. For those clients, setup writes MCP config and an `AGENTS.md` marker that instructs the agent to route broad structural context through Edgebase automatically. Edgebase also exposes MCP prompts named `edgebase`, `edgebase-goal`, `goal`, and the `edgebase-*` aliases for clients that surface prompt menus.
 

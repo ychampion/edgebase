@@ -31,6 +31,10 @@ def preflight_markdown_path(root: str | Path) -> Path:
     return find_repo_root(root) / ".edgebase" / "preflight.md"
 
 
+def active_goal_path(root: str | Path) -> Path:
+    return find_repo_root(root) / ".edgebase" / "session" / "active-goal.json"
+
+
 def prepare_goal_capsule(
     root: str | Path,
     goal: str,
@@ -56,13 +60,21 @@ def prepare_goal_capsule(
         "worktree_changed_files": git_changed_files(repo_root),
         "selected_files": capsule.contract.selected_files,
         "must_read": capsule.contract.must_read,
+        "must_not_touch": capsule.contract.must_not_touch,
         "blast_radius": capsule.contract.blast_radius,
         "test_plan": capsule.contract.test_plan,
+        "acceptance_criteria": capsule.contract.acceptance_criteria,
+        "risk_flags": capsule.contract.risk_flags,
+        "uncertainties": capsule.contract.uncertainties,
+        "provenance": capsule.contract.provenance,
         "stale_files": current_stale_files(repo_root),
         "graph_artifacts": capsule.graph_artifacts,
         "capsule_path": str(markdown_path),
+        "capsule_markdown": capsule.markdown,
+        "work_contract": capsule.contract.to_dict(),
     }
     write_preflight_state(repo_root, state)
+    write_active_goal_state(repo_root, state)
     return capsule
 
 
@@ -81,6 +93,17 @@ def write_preflight_state(root: str | Path, state: dict[str, Any]) -> Path:
     path = preflight_state_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     write_text_atomic(path, json.dumps(state, indent=2, sort_keys=True) + "\n")
+    return path
+
+
+def write_active_goal_state(root: str | Path, state: dict[str, Any]) -> Path:
+    repo_root = find_repo_root(root)
+    active = dict(state)
+    active["version"] = 1
+    active["working_tree_changed_files"] = active.get("worktree_changed_files") or []
+    path = active_goal_path(repo_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_text_atomic(path, json.dumps(active, indent=2, sort_keys=True) + "\n")
     return path
 
 
