@@ -1,0 +1,2 @@
+{"id":"python-auth","task":"Change login validation and update tests","changed_files":["src/auth/login.py"]}
+{"id":"typescript-api","task":"Find callers before changing the user API response shape","changed_files":["packages/api/src/users.ts"]}

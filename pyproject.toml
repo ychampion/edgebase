@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "edgebase"
+version = "0.1.0"
+description = "Git-native, provenance-backed context capsules for coding agents."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Edgebase contributors" }]
+keywords = ["agents", "mcp", "code-intelligence", "knowledge-graph", "git"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Software Development",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/ychampion/edgebase"
+Repository = "https://github.com/ychampion/edgebase"
+Issues = "https://github.com/ychampion/edgebase/issues"
+
+[project.scripts]
+edgebase = "edgebase.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
