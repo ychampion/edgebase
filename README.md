@@ -1,27 +1,64 @@
 # Edgebase
 
-Edgebase is a local, git-native context layer for coding agents.
+Edgebase is a local, git-native work-contract layer for coding agents.
 
-It keeps `AGENTS.md` small, indexes the repository into a rebuildable SQLite graph, and exposes MCP tools that agents can use before editing:
+Its flagship feature is **Goal Capsules**: short, executable briefs that tell Codex, Claude Code, Continue-style agents, and human reviewers what to read, what not to touch yet, what tests matter, and what evidence the final patch must include.
+
+```bash
+python3 -m edgebase goal "Add passwordless login support without breaking existing OAuth"
+```
+
+```text
+# Edgebase Goal Capsule
+
+Goal:
+Add passwordless login support without breaking existing OAuth
+
+Current hypothesis:
+Edgebase ranks `src/auth/login.py` as the strongest lead, with related context in `src/auth/oauth.py`.
+
+Blast radius:
+- src/auth/login.py
+- src/auth/oauth.py
+- tests/auth/test_login.py
+- tests/auth/test_oauth.py
+
+Read first:
+1. src/auth/login.py
+2. src/auth/oauth.py
+3. tests/auth/test_login.py
+
+Do not edit yet:
+- migrations/*
+- provider configs
+Reason: no schema or provider-configuration change is proven necessary by the current graph evidence.
+
+Required checks:
+- pytest tests/auth/test_login.py
+- pytest tests/auth/test_oauth.py
+
+Patch contract:
+The final PR must include changed files, rationale, tests run, regression evidence, and unresolved assumptions.
+```
+
+Goal Capsules are backed by the local graph index, git state, inferred tests, provenance, and working-tree freshness. They are designed to be pasted into an agent as `/goal ...` or called through the CLI/MCP before any write tool runs.
+
+Edgebase also keeps `AGENTS.md` small, indexes the repository into a rebuildable SQLite graph, and exposes MCP tools that agents can use before editing:
 
 ```text
 edgebase_context(task, changed_files?, budget?)
 edgebase_goal(goal, changed_files?, budget?)
 ```
 
-The output is a compact, source-backed context capsule: high-signal files, symbols, imports, conservative call edges, inferred tests, owners, churn, freshness, and provenance. Claude Code also gets automatic prompt-time context injection through hooks, so users do not need to remember a special phrase before each task.
-
-The flagship manual surface is a Goal Capsule:
-
-```bash
-python3 -m edgebase goal "Add passwordless login support without breaking existing OAuth"
-```
-
-Goal Capsules turn a short objective into an executable work contract: current hypothesis, blast radius, read-first files, protected areas, likely implementation path, required checks, uncertainties, and the final patch contract.
+The companion context output remains a compact, source-backed capsule: high-signal files, symbols, imports, conservative call edges, inferred tests, owners, churn, freshness, and provenance. Claude Code also gets automatic prompt-time context injection through hooks, so users do not need to remember a special phrase before each task.
 
 Edgebase is not a vector database, a Neo4j wrapper, or a generic memory product. It is a small local substrate for answering:
 
 > Given this task and current diff, what context should the agent read before touching code?
+
+With Goal Capsules, Edgebase also answers:
+
+> What is the executable contract for this goal, and what evidence must the patch return?
 
 ## Why This Exists
 
