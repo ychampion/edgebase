@@ -316,6 +316,25 @@ class EdgebaseTests(unittest.TestCase):
             symbols = {(row["file_path"], row["name"]) for row in graph["symbols"]}
             self.assertIn(("app/scratch.py", "draft"), symbols)
 
+    def test_context_changed_flag_includes_git_status_files(self) -> None:
+        with sample_repo() as repo:
+            index_repo(repo)
+            auth_path = repo / "app" / "auth.py"
+            auth_path.write_text(auth_path.read_text(encoding="utf-8") + "\n# changed\n", encoding="utf-8")
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+            proc = subprocess.run(
+                [sys.executable, "-m", "edgebase", "context", "review auth changes", "--root", str(repo), "--changed", "--json"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertIn("app/auth.py", payload["stale_files"])
+
 
 class sample_repo:
     def __enter__(self) -> Path:

@@ -102,6 +102,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_subcommand_root(context_p)
     context_p.add_argument("task", help="Coding task or investigation goal.")
     context_p.add_argument("--changed-file", action="append", default=[], help="Changed file hint.")
+    context_p.add_argument(
+        "--changed",
+        action="store_true",
+        help="Also include changed files from `git status` as changed-file hints.",
+    )
     context_p.add_argument("--budget", type=int, default=1200, help="Approximate token budget.")
     context_p.add_argument("--json", action="store_true", help="Emit JSON with markdown and metadata.")
     context_p.set_defaults(func=cmd_context)
@@ -246,7 +251,10 @@ def cmd_disable(args: argparse.Namespace) -> int:
 
 
 def cmd_context(args: argparse.Namespace) -> int:
-    capsule = build_context(args.root, args.task, args.changed_file, args.budget)
+    changed = list(args.changed_file)
+    if args.changed:
+        changed.extend(changed_files(find_repo_root(args.root)))
+    capsule = build_context(args.root, args.task, sorted(set(changed)), args.budget)
     if args.json:
         print(
             json.dumps(
