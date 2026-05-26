@@ -6,6 +6,7 @@ import sys
 
 from . import __version__
 from .benchmark import run_benchmark
+from .bootstrap import render_bootstrap, render_install_prompt
 from .context import build_context
 from .context_branches import create_checkpoint, create_fork_plan, render_resume, resume_snapshot
 from .doctor import run_doctor
@@ -104,6 +105,19 @@ def build_parser() -> argparse.ArgumentParser:
     disable_p.add_argument("--keep-hooks", action="store_true", help="Leave installed hooks in place.")
     disable_p.add_argument("--keep-agent-docs", action="store_true", help="Leave AGENTS.md Edgebase instructions.")
     disable_p.set_defaults(func=cmd_disable)
+
+    install_prompt_p = sub.add_parser("install-prompt", help="Print a copy/paste agent prompt for installing Edgebase.")
+    install_prompt_p.add_argument(
+        "--agent",
+        default="all",
+        help=f"Agent host to target. Supported: all,{','.join(ALL_AGENTS)}.",
+    )
+    install_prompt_p.add_argument(
+        "--markdown",
+        action="store_true",
+        help="Wrap the prompt in a Markdown bootstrap block.",
+    )
+    install_prompt_p.set_defaults(func=cmd_install_prompt)
 
     context_p = sub.add_parser("context", help="Return a compact context capsule for a task.")
     add_subcommand_root(context_p)
@@ -335,6 +349,16 @@ def cmd_disable(args: argparse.Namespace) -> int:
         return 1
     for result in results:
         print(f"{result.action}: {result.path} ({result.detail})")
+    return 0
+
+
+def cmd_install_prompt(args: argparse.Namespace) -> int:
+    try:
+        text = render_bootstrap(args.agent) if args.markdown else render_install_prompt(args.agent)
+    except ValueError as exc:
+        print(f"install-prompt failed: {exc}", file=sys.stderr)
+        return 1
+    print(text)
     return 0
 
 

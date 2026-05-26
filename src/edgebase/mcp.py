@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import shlex
 import sys
 from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .commands import shell_join
 from .context import build_context
 from .context_branches import create_checkpoint, create_fork_plan, render_resume, resume_snapshot
 from .graph import graph_artifact_summary, write_graph_artifacts
@@ -151,11 +151,11 @@ def slash_prompt_definition(spec: Any) -> dict[str, Any]:
 
 
 def slash_prompt_cli(spec: Any, raw_arguments: str) -> str:
-    cli = shlex.join([sys.executable, "-m", "edgebase", *spec.cli_args])
+    cli = shell_join([sys.executable, "-m", "edgebase", *spec.cli_args])
     if "$ARGUMENTS" not in spec.argument_expr:
         return cli + spec.argument_expr
     if '"$ARGUMENTS"' in spec.argument_expr:
-        return cli + spec.argument_expr.replace('"$ARGUMENTS"', shlex.quote(raw_arguments))
+        return cli + spec.argument_expr.replace('"$ARGUMENTS"', shell_join([raw_arguments]))
     return cli + spec.argument_expr.replace("$ARGUMENTS", raw_arguments)
 
 

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.1.9 - 2026-05-26
+
+### Added
+
+- `edgebase install-prompt --agent <name>` prints the copy/paste setup prompt for Claude Code, Codex, or all supported agent hosts.
+
+### Changed
+
+- Generated hook commands and slash-skill fallback commands now use platform-aware quoting so Windows paths with spaces render with Windows-compatible double quotes while macOS/Linux keep POSIX quoting.
+- MCP prompt command fallbacks now share the same platform-aware rendering as generated Claude Code and Codex skills.
+
+### Fixed
+
+- Codex hook setup now writes the current event-keyed `hooks.json` shape, while preserving unrelated hooks and migrating Edgebase's older flat hook entries.
+- `fork-plan` no longer treats Edgebase's own local `.edgebase/` cache as a dirty user change after `checkpoint`.
+
 ## 0.1.8 - 2026-05-26
 
 ### Added

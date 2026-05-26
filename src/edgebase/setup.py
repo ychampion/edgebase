@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 import re
-import shlex
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from .commands import shell_join
 from .git import run_git
 from .hooks import (
     install_claude_hooks,
@@ -426,10 +426,7 @@ def install_claude_skill(repo_root: Path, command: str | None) -> Path:
 
 def claude_skill_content(repo_root: Path, command: str | None) -> str:
     executable, prefix = command_parts(command)
-    command_prefix = " ".join(
-        shlex.quote(part)
-        for part in [executable, *prefix, "--root", str(repo_root), "context"]
-    )
+    command_prefix = shell_join([executable, *prefix, "--root", str(repo_root), "context"])
     return (
         f"{CLAUDE_SKILL_START}\n"
         "---\n"
@@ -499,10 +496,7 @@ def claude_goal_skill_content(
     marker_end: str,
 ) -> str:
     executable, prefix = command_parts(command)
-    command_prefix = " ".join(
-        shlex.quote(part)
-        for part in [executable, *prefix, "--root", str(repo_root), "goal"]
-    )
+    command_prefix = shell_join([executable, *prefix, "--root", str(repo_root), "goal"])
     return (
         f"{marker_start}\n"
         "---\n"
@@ -615,7 +609,7 @@ def install_codex_skill(repo_root: Path, command: str | None) -> Path:
 
 def codex_skill_content(repo_root: Path, command: str | None) -> str:
     executable, prefix = command_parts(command)
-    command_prefix = " ".join(shlex.quote(part) for part in [executable, *prefix, "--root", str(repo_root), "context"])
+    command_prefix = shell_join([executable, *prefix, "--root", str(repo_root), "context"])
     return (
         f"{CODEX_SKILL_START}\n"
         "---\nname: edgebase\ndescription: Fetch source-backed Edgebase context before broad exploration or edits.\n---\n\n"
@@ -673,7 +667,7 @@ def codex_goal_skill_content(
     marker_end: str,
 ) -> str:
     executable, prefix = command_parts(command)
-    command_prefix = " ".join(shlex.quote(part) for part in [executable, *prefix, "--root", str(repo_root), "goal"])
+    command_prefix = shell_join([executable, *prefix, "--root", str(repo_root), "goal"])
     return (
         f"{marker_start}\n"
         f"---\nname: {skill_name}\ndescription: Create and record an Edgebase Goal Capsule before editing.\n---\n\n"
@@ -727,7 +721,7 @@ def slash_command_line(repo_root: Path, command: str | None, spec: SlashCommandS
         parts = [executable, *prefix, *spec.cli_args]
     else:
         parts = [executable, *prefix, *spec.cli_args, "--root", str(repo_root)]
-    command_prefix = shlex.join(parts)
+    command_prefix = shell_join(parts)
     return command_prefix + spec.argument_expr
 
 

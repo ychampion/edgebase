@@ -17,6 +17,13 @@ The normal installation path is a prompt, not a command the user has to run manu
 Set up Edgebase in this repo: current working directory. Install it from https://github.com/ychampion/edgebase, run the local setup and doctor checks yourself, preserve existing agent config, do not commit, and report exactly what changed.
 ```
 
+To generate a tailored copy/paste prompt from an installed Edgebase checkout:
+
+```bash
+python3 -m edgebase install-prompt --agent claude
+python3 -m edgebase install-prompt --agent codex
+```
+
 For stricter setup, paste the full prompt:
 
 ```text
@@ -177,14 +184,26 @@ Project setup also writes `.codex/hooks.json`:
 
 ```json
 {
-  "hooks": [
-    {"event": "SessionStart", "command": "<generated Edgebase session-start hook command>"},
-    {"event": "UserPromptSubmit", "command": "<generated Edgebase prompt hook command>"},
-    {"event": "PreToolUse", "command": "<generated Edgebase pre-tool hook command>"},
-    {"event": "PostToolUse", "command": "<generated Edgebase post-tool hook command>"},
-    {"event": "PreCompact", "command": "<generated Edgebase pre-compact hook command>"},
-    {"event": "Stop", "command": "<generated Edgebase stop hook command>"}
-  ]
+  "hooks": {
+    "SessionStart": [
+      {"hooks": [{"type": "command", "command": "<generated Edgebase session-start hook command>"}]}
+    ],
+    "UserPromptSubmit": [
+      {"hooks": [{"type": "command", "command": "<generated Edgebase prompt hook command>"}]}
+    ],
+    "PreToolUse": [
+      {"hooks": [{"type": "command", "command": "<generated Edgebase pre-tool hook command>"}]}
+    ],
+    "PostToolUse": [
+      {"hooks": [{"type": "command", "command": "<generated Edgebase post-tool hook command>"}]}
+    ],
+    "PreCompact": [
+      {"hooks": [{"type": "command", "command": "<generated Edgebase pre-compact hook command>"}]}
+    ],
+    "Stop": [
+      {"hooks": [{"type": "command", "command": "<generated Edgebase stop hook command>"}]}
+    ]
+  }
 }
 ```
 

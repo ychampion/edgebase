@@ -15,6 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from edgebase import __version__
 from edgebase.benchmark import run_external
+from edgebase.bootstrap import render_bootstrap, render_install_prompt
+from edgebase.commands import shell_join
 from edgebase.context import build_context
 from edgebase.doctor import run_doctor
 from edgebase.goal import build_goal_capsule, build_patch_passport
@@ -35,6 +37,19 @@ from edgebase.store import Store
 
 
 class EdgebaseTests(unittest.TestCase):
+    def test_shell_join_uses_host_appropriate_quoting(self) -> None:
+        self.assertEqual(
+            shell_join(
+                ["C:\\Program Files\\Python\\python.exe", "-m", "edgebase", "checkpoint", "handoff message"],
+                platform="nt",
+            ),
+            '"C:\\Program Files\\Python\\python.exe" -m edgebase checkpoint "handoff message"',
+        )
+        self.assertEqual(
+            shell_join(["/usr/bin/python3", "-m", "edgebase", "checkpoint", "handoff message"], platform="posix"),
+            "/usr/bin/python3 -m edgebase checkpoint 'handoff message'",
+        )
+
     def test_indexes_python_symbols_edges_tests_and_git_metrics(self) -> None:
         with sample_repo() as repo:
             result = index_repo(repo)
@@ -223,6 +238,50 @@ class EdgebaseTests(unittest.TestCase):
                 },
             )
             self.assertEqual(data["goal"], "modify login")
+
+    def test_install_prompt_output_targets_selected_agents(self) -> None:
+        codex = render_install_prompt("codex")
+        self.assertIn("edgebase setup --scope both --agents codex", codex)
+        self.assertIn("edgebase doctor --scope both --agents codex", codex)
+        self.assertIn("Codex", codex)
+        self.assertNotIn("Claude Code", codex)
+        self.assertIn("report exactly which capabilities became automatic", codex)
+
+        all_prompt = render_install_prompt("all")
+        self.assertIn("Claude Code", all_prompt)
+        self.assertIn("Codex", all_prompt)
+        self.assertIn("edgebase_context", all_prompt)
+
+        bootstrap = render_bootstrap("claude")
+        self.assertIn("# Edgebase Bootstrap", bootstrap)
+        self.assertIn("Claude Code", bootstrap)
+
+    def test_install_prompt_cli_validates_agents(self) -> None:
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+        proc = subprocess.run(
+            [sys.executable, "-m", "edgebase", "install-prompt", "--agent", "codex"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("edgebase setup --scope both --agents codex", proc.stdout)
+
+        bad = subprocess.run(
+            [sys.executable, "-m", "edgebase", "install-prompt", "--agent", "unknown"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(bad.returncode, 1)
+        self.assertIn("Unknown agent", bad.stderr)
 
     def test_cli_version_flag_reports_package_version(self) -> None:
         env = os.environ.copy()
@@ -510,10 +569,12 @@ class EdgebaseTests(unittest.TestCase):
 
             hooks = json.loads((repo / ".codex" / "hooks.json").read_text(encoding="utf-8"))
             self.assertEqual(
-                [hook["event"] for hook in hooks["hooks"]],
-                ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PreCompact", "Stop"],
+                set(hooks["hooks"]),
+                {"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PreCompact", "Stop"},
             )
-            self.assertTrue(all("edgebase hooks codex-" in hook["command"] for hook in hooks["hooks"]))
+            for event_entries in hooks["hooks"].values():
+                self.assertEqual(event_entries[0]["hooks"][0]["type"], "command")
+                self.assertIn("edgebase hooks codex-", event_entries[0]["hooks"][0]["command"])
 
             skill = (repo / ".agents" / "skills" / "edgebase" / "SKILL.md").read_text(encoding="utf-8")
             self.assertIn("edgebase_context", skill)
@@ -573,7 +634,20 @@ class EdgebaseTests(unittest.TestCase):
             hooks_path = repo / ".codex" / "hooks.json"
             hooks_path.parent.mkdir(parents=True)
             hooks_path.write_text(
-                json.dumps({"hooks": [{"event": "PreToolUse", "command": "echo keep"}], "custom": True}) + "\n",
+                json.dumps(
+                    {
+                        "hooks": {
+                            "PreToolUse": [
+                                {
+                                    "matcher": "Bash",
+                                    "hooks": [{"type": "command", "command": "echo keep"}],
+                                }
+                            ]
+                        },
+                        "custom": True,
+                    }
+                )
+                + "\n",
                 encoding="utf-8",
             )
             setup_repo(
@@ -585,12 +659,52 @@ class EdgebaseTests(unittest.TestCase):
             )
             installed = json.loads(hooks_path.read_text(encoding="utf-8"))
             self.assertTrue(installed["custom"])
-            self.assertIn({"event": "PreToolUse", "command": "echo keep"}, installed["hooks"])
-            self.assertEqual(sum("edgebase hooks codex-" in hook["command"] for hook in installed["hooks"]), 6)
+            self.assertIn(
+                {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo keep"}]},
+                installed["hooks"]["PreToolUse"],
+            )
+            rendered = json.dumps(installed["hooks"])
+            self.assertEqual(rendered.count("edgebase hooks codex-"), 6)
 
             disable_repo(repo, agents=["codex"], scope="project")
             remaining = json.loads(hooks_path.read_text(encoding="utf-8"))
-            self.assertEqual(remaining, {"custom": True, "hooks": [{"event": "PreToolUse", "command": "echo keep"}]})
+            self.assertEqual(
+                remaining,
+                {
+                    "custom": True,
+                    "hooks": {
+                        "PreToolUse": [
+                            {
+                                "matcher": "Bash",
+                                "hooks": [{"type": "command", "command": "echo keep"}],
+                            }
+                        ]
+                    },
+                },
+            )
+
+    def test_codex_hooks_migrate_legacy_flat_hook_entries(self) -> None:
+        with sample_repo() as repo:
+            hooks_path = repo / ".codex" / "hooks.json"
+            hooks_path.parent.mkdir(parents=True)
+            hooks_path.write_text(
+                json.dumps({"hooks": [{"event": "PreToolUse", "command": "echo keep", "matcher": "Bash"}]}) + "\n",
+                encoding="utf-8",
+            )
+            setup_repo(
+                repo,
+                agents=["codex"],
+                scope="project",
+                install_hooks=True,
+                write_agents_md=False,
+            )
+
+            installed = json.loads(hooks_path.read_text(encoding="utf-8"))
+            self.assertIsInstance(installed["hooks"], dict)
+            self.assertIn(
+                {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo keep"}]},
+                installed["hooks"]["PreToolUse"],
+            )
 
     def test_disable_removes_project_integrations_and_agent_docs(self) -> None:
         with sample_repo() as repo:
@@ -848,6 +962,67 @@ class EdgebaseTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             payload = json.loads(proc.stdout)
             self.assertIn("app/auth.py", payload["stale_files"])
+
+    def test_checkpoint_cache_does_not_make_fork_plan_dirty(self) -> None:
+        with sample_repo() as repo, tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+            checkpoint = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "edgebase",
+                    "checkpoint",
+                    "base handoff",
+                    "--root",
+                    str(repo),
+                    "--json",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                check=False,
+            )
+            self.assertEqual(checkpoint.returncode, 0, checkpoint.stderr)
+            checkpoint_id = json.loads(checkpoint.stdout)["id"]
+            worktree = Path(tmp) / "plan"
+            try:
+                fork_plan = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "edgebase",
+                        "fork-plan",
+                        "try planned work",
+                        "--root",
+                        str(repo),
+                        "--from-id",
+                        checkpoint_id,
+                        "--branch",
+                        "edgebase/test-plan",
+                        "--path",
+                        str(worktree),
+                        "--json",
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    env=env,
+                    check=False,
+                )
+                self.assertEqual(fork_plan.returncode, 0, fork_plan.stderr)
+                payload = json.loads(fork_plan.stdout)
+                self.assertEqual(payload["kind"], "fork-plan")
+                self.assertEqual(payload["worktree_path"], str(worktree.resolve()))
+            finally:
+                subprocess.run(
+                    ["git", "worktree", "remove", "--force", str(worktree)],
+                    cwd=repo,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
 
 
 class sample_repo:

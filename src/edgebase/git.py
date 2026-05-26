@@ -89,8 +89,9 @@ def changed_files(root: Path) -> list[str]:
         raw = line[3:].strip()
         if " -> " in raw:
             raw = raw.split(" -> ", 1)[1]
-        if raw:
-            paths.append(raw.strip('"'))
+        path = raw.strip('"')
+        if path and not should_skip_path(path):
+            paths.append(path)
     return sorted(set(paths))
 
 

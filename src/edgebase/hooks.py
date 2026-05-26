@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 import os
-import shlex
 import sys
 from pathlib import Path
 from typing import Any, Iterable
 
+from .commands import shell_join
 from .git import changed_files, find_repo_root, is_git_repo
 from .goal import render_edit_delta
 from .graph import graph_artifact_summary, write_graph_artifacts
@@ -102,32 +102,142 @@ def install_codex_hooks(root: str | Path) -> Path:
             raise RuntimeError(f"Refusing to overwrite invalid JSON: {hooks_path}") from exc
         if isinstance(loaded, dict):
             payload = loaded
-    existing_hooks = payload.get("hooks")
-    hooks = existing_hooks if isinstance(existing_hooks, list) else []
-    hooks = [hook for hook in hooks if not codex_hook_runs_edgebase(hook)]
-    hooks.extend(codex_hook_entries(repo_root))
+    hooks = codex_hooks_without_edgebase(payload.get("hooks"))
+    for event_name, entries in codex_hook_entries(repo_root).items():
+        event_entries = hooks.setdefault(event_name, [])
+        for entry in entries:
+            append_unique(event_entries, entry)
     payload["hooks"] = hooks
     hooks_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return hooks_path
 
 
-def codex_hook_entries(repo_root: Path) -> list[dict[str, str]]:
-    return [
-        {"event": "SessionStart", "command": hook_command(repo_root, "codex-session-start")},
-        {"event": "UserPromptSubmit", "command": hook_command(repo_root, "codex-user-prompt-submit")},
-        {"event": "PreToolUse", "command": hook_command(repo_root, "codex-pre-tool-use")},
-        {"event": "PostToolUse", "command": hook_command(repo_root, "codex-post-tool-use")},
-        {"event": "PreCompact", "command": hook_command(repo_root, "codex-pre-compact")},
-        {"event": "Stop", "command": hook_command(repo_root, "codex-stop")},
-    ]
+def codex_hook_entries(repo_root: Path) -> dict[str, list[dict[str, object]]]:
+    return {
+        "SessionStart": [
+            codex_hook_entry(
+                repo_root,
+                "codex-session-start",
+                timeout=30,
+                status_message="Loading Edgebase context",
+            )
+        ],
+        "UserPromptSubmit": [
+            codex_hook_entry(
+                repo_root,
+                "codex-user-prompt-submit",
+                timeout=60,
+                status_message="Recording Edgebase Goal Capsule",
+            )
+        ],
+        "PreToolUse": [
+            codex_hook_entry(
+                repo_root,
+                "codex-pre-tool-use",
+                timeout=30,
+                status_message="Checking Edgebase preflight",
+            )
+        ],
+        "PostToolUse": [
+            codex_hook_entry(
+                repo_root,
+                "codex-post-tool-use",
+                timeout=60,
+                status_message="Refreshing Edgebase context",
+            )
+        ],
+        "PreCompact": [
+            codex_hook_entry(
+                repo_root,
+                "codex-pre-compact",
+                timeout=30,
+                status_message="Saving Edgebase checkpoint",
+            )
+        ],
+        "Stop": [
+            codex_hook_entry(
+                repo_root,
+                "codex-stop",
+                timeout=30,
+                status_message="Saving Edgebase Patch Passport",
+            )
+        ],
+    }
+
+
+def codex_hook_entry(
+    repo_root: Path,
+    hook_name: str,
+    matcher: str | None = None,
+    timeout: int = 30,
+    status_message: str | None = None,
+) -> dict[str, object]:
+    command: dict[str, object] = {
+        "type": "command",
+        "command": hook_command(repo_root, hook_name),
+        "timeout": timeout,
+    }
+    if status_message:
+        command["statusMessage"] = status_message
+    entry: dict[str, object] = {"hooks": [command]}
+    if matcher is not None:
+        entry["matcher"] = matcher
+    return entry
+
+
+def codex_hooks_without_edgebase(existing_hooks: object) -> dict[str, list[dict[str, object]]]:
+    if isinstance(existing_hooks, dict):
+        normalized: dict[str, list[dict[str, object]]] = {}
+        for event_name, entries in existing_hooks.items():
+            if not isinstance(event_name, str) or not isinstance(entries, list):
+                continue
+            kept = [entry for entry in entries if isinstance(entry, dict) and not codex_hook_runs_edgebase(entry)]
+            if kept:
+                normalized[event_name] = kept
+        return normalized
+    if isinstance(existing_hooks, list):
+        normalized: dict[str, list[dict[str, object]]] = {}
+        for entry in existing_hooks:
+            converted = convert_legacy_codex_hook(entry)
+            if converted is None or codex_hook_runs_edgebase(converted[1]):
+                continue
+            event_entries = normalized.setdefault(converted[0], [])
+            append_unique(event_entries, converted[1])
+        return normalized
+    return {}
+
+
+def convert_legacy_codex_hook(entry: object) -> tuple[str, dict[str, object]] | None:
+    if not isinstance(entry, dict):
+        return None
+    event = entry.get("event")
+    command_text = entry.get("command")
+    if not isinstance(event, str) or not isinstance(command_text, str):
+        return None
+    command: dict[str, object] = {"type": "command", "command": command_text}
+    timeout = entry.get("timeout")
+    if isinstance(timeout, int):
+        command["timeout"] = timeout
+    status_message = entry.get("statusMessage") or entry.get("status_message")
+    if isinstance(status_message, str):
+        command["statusMessage"] = status_message
+    group: dict[str, object] = {"hooks": [command]}
+    matcher = entry.get("matcher")
+    if isinstance(matcher, str):
+        group["matcher"] = matcher
+    return event, group
 
 
 def codex_hook_runs_edgebase(entry: object) -> bool:
-    return isinstance(entry, dict) and "edgebase hooks codex-" in str(entry.get("command", ""))
+    if isinstance(entry, dict):
+        return any(codex_hook_runs_edgebase(value) for value in entry.values())
+    if isinstance(entry, list):
+        return any(codex_hook_runs_edgebase(value) for value in entry)
+    return isinstance(entry, str) and "edgebase hooks codex-" in entry
 
 
 def hook_command(repo_root: Path, hook_name: str) -> str:
-    return shlex.join([sys.executable, "-m", "edgebase", "hooks", hook_name, "--root", str(repo_root)])
+    return shell_join([sys.executable, "-m", "edgebase", "hooks", hook_name, "--root", str(repo_root)])
 
 
 def uninstall_claude_hooks(root: str | Path) -> Path:
@@ -166,9 +276,17 @@ def uninstall_codex_hooks(root: str | Path) -> Path:
         hooks_path.unlink()
         return hooks_path
     hooks = payload.get("hooks")
-    if isinstance(hooks, list):
-        payload["hooks"] = [hook for hook in hooks if not codex_hook_runs_edgebase(hook)]
-        if payload["hooks"] == []:
+    if isinstance(hooks, dict):
+        cleaned = codex_hooks_without_edgebase(hooks)
+        if cleaned:
+            payload["hooks"] = cleaned
+        else:
+            payload.pop("hooks", None)
+    elif isinstance(hooks, list):
+        cleaned = codex_hooks_without_edgebase(hooks)
+        if cleaned:
+            payload["hooks"] = cleaned
+        else:
             payload.pop("hooks", None)
     if not payload:
         hooks_path.unlink()

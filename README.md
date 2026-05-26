@@ -114,6 +114,13 @@ Flat instruction files such as `AGENTS.md`, `CLAUDE.md`, and Cursor rules are st
 
 ## Install With Any Agent
 
+Generate the copy/paste setup prompt for a specific agent:
+
+```bash
+python3 -m edgebase install-prompt --agent claude
+python3 -m edgebase install-prompt --agent codex
+```
+
 Paste this into Claude Code, Codex, Cursor, Gemini CLI, OpenCode, Windsurf, or any coding agent with shell access:
 
 ```text
@@ -224,6 +231,7 @@ Useful explicit slash commands inside supported agent REPLs/apps:
 Shell fallback and server/development commands:
 
 ```bash
+python3 -m edgebase install-prompt --agent codex
 python3 -m edgebase context "change the auth login flow" --budget 1200
 python3 -m edgebase goal "add passwordless login without breaking OAuth" --budget 1200
 python3 -m edgebase radius src/auth/login.py --goal "add passwordless login without breaking OAuth"
@@ -290,7 +298,7 @@ Automation layers:
 This is not a separate graph UI or a new agent control surface; visualization is kept as a local artifact attached to the existing agent context flow.
 
 See [Architecture](docs/ARCHITECTURE.md), [Validation](docs/VALIDATION.md), and [Graph Verification](docs/GRAPH_VERIFICATION_0.1.7.md).
-The latest release audit is documented in [Release Audit](docs/RELEASE_AUDIT_0.1.8.md).
+The latest release audit is documented in [Release Audit](docs/RELEASE_AUDIT_0.1.9.md).
 
 ## Benchmarks
 
