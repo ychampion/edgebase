@@ -11,4 +11,5 @@ build/
 .venv/
 .edgebase/
 .omx/
+.claude/worktrees/
 results.json

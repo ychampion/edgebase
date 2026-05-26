@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -12,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from edgebase.context import build_context
 from edgebase.indexer import index_repo
 from edgebase.mcp import McpServer
-from edgebase.setup import setup_repo
+from edgebase.setup import AGENT_DOC_START, disable_repo, setup_repo
 from edgebase.store import Store
 
 
@@ -95,6 +96,30 @@ class EdgebaseTests(unittest.TestCase):
             self.assertIn("# Edgebase Context", text)
             self.assertIn("app/auth.py", text)
 
+    def test_mcp_cli_accepts_root_after_subcommand(self) -> None:
+        with sample_repo() as repo:
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+            payload = "\n".join(
+                [
+                    json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
+                    json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
+                    "",
+                ]
+            )
+            proc = subprocess.run(
+                [sys.executable, "-m", "edgebase", "mcp", "--root", str(repo)],
+                input=payload,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                timeout=10,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("edgebase_context", proc.stdout)
+
     def test_setup_writes_project_agent_configs_without_overwriting_agents_md(self) -> None:
         with sample_repo() as repo:
             (repo / "AGENTS.md").write_text("# Existing\n", encoding="utf-8")
@@ -105,11 +130,14 @@ class EdgebaseTests(unittest.TestCase):
                 install_hooks=False,
                 write_agents_md=True,
             )
-            self.assertTrue(any(result.path.name == "EDGEBASE.md" for result in results))
-            self.assertEqual((repo / "AGENTS.md").read_text(encoding="utf-8"), "# Existing\n")
+            self.assertTrue(any(result.path.name == "AGENTS.md" for result in results))
+            agents_md = (repo / "AGENTS.md").read_text(encoding="utf-8")
+            self.assertTrue(agents_md.startswith("# Existing\n"))
+            self.assertIn(AGENT_DOC_START, agents_md)
 
             claude = json.loads((repo / ".mcp.json").read_text(encoding="utf-8"))
-            self.assertEqual(claude["mcpServers"]["edgebase"]["command"], "edgebase")
+            self.assertIn("-m", claude["mcpServers"]["edgebase"]["args"])
+            self.assertIn("edgebase", claude["mcpServers"]["edgebase"]["args"])
 
             cursor = json.loads((repo / ".cursor" / "mcp.json").read_text(encoding="utf-8"))
             self.assertIn("edgebase", cursor["mcpServers"])
@@ -122,6 +150,37 @@ class EdgebaseTests(unittest.TestCase):
 
             codex = (repo / ".codex" / "config.toml").read_text(encoding="utf-8")
             self.assertIn("[mcp_servers.edgebase]", codex)
+            self.assertIn("enabled = true", codex)
+
+    def test_disable_removes_project_integrations_and_agent_docs(self) -> None:
+        with sample_repo() as repo:
+            setup_repo(
+                repo,
+                agents=["claude,codex,cursor,gemini,opencode"],
+                scope="project",
+                install_hooks=True,
+                write_agents_md=True,
+            )
+            results = disable_repo(repo, agents=["claude,codex,cursor,gemini,opencode"], scope="project")
+            self.assertTrue(results)
+
+            agents_md = (repo / "AGENTS.md").read_text(encoding="utf-8")
+            self.assertNotIn(AGENT_DOC_START, agents_md)
+
+            claude = json.loads((repo / ".mcp.json").read_text(encoding="utf-8"))
+            self.assertNotIn("edgebase", claude.get("mcpServers", {}))
+
+            cursor = json.loads((repo / ".cursor" / "mcp.json").read_text(encoding="utf-8"))
+            self.assertNotIn("edgebase", cursor.get("mcpServers", {}))
+
+            codex = (repo / ".codex" / "config.toml").read_text(encoding="utf-8")
+            self.assertNotIn("[mcp_servers.edgebase]", codex)
+
+            opencode = json.loads((repo / ".opencode.json").read_text(encoding="utf-8"))
+            self.assertFalse(opencode["mcp"]["edgebase"]["enabled"])
+
+            claude_hooks = json.loads((repo / ".claude" / "settings.json").read_text(encoding="utf-8"))
+            self.assertNotIn("hooks", claude_hooks)
 
     def test_index_includes_untracked_non_ignored_sources(self) -> None:
         with sample_repo() as repo:

@@ -1,37 +1,94 @@
-# Edgebase Validation
+# Validation
 
-Edgebase should earn adoption with measurements, not positioning.
+Edgebase should earn adoption through evidence.
 
-## Required Comparisons
+The core claim is narrow:
 
-Run the benchmark harness on at least:
+> For coding-agent tasks in medium and large repos, Edgebase should reduce context tokens and exploratory tool calls without reducing patch quality.
 
-- One TypeScript repository
-- One Python repository
-- One Go or Rust repository
-- One monorepo
+## Baselines
 
-Compare:
+Every benchmark should include:
 
+- plain `rg` plus file reads
 - Edgebase
-- Plain `rg` plus file reads
-- CodeGraphContext, if installed
-- codebase-memory-mcp, if installed
-- GitNexus, if installed
+- CodeGraphContext, when installed
+- codebase-memory-mcp, when installed
+- GitNexus, when installed
+
+External tools are optional command templates so the harness remains usable without downloading competitors.
+
+## Repository Matrix
+
+Run against at least:
+
+- one TypeScript app
+- one Python service/library
+- one Go or Rust project
+- one monorepo
+- one repo with generated files and ignored directories
 
 ## Metrics
 
-- Context token estimate
-- Tool-call estimate
-- Wall time
-- Stale-context incidents
-- False dependency edges found during manual review
-- Patch success, when paired with an agent evaluation harness
+Record:
+
+- context token estimate
+- tool-call estimate
+- wall time
+- selected files
+- stale-context incidents
+- false dependency edges found by review
+- whether the paired agent patch succeeded
+- whether relevant tests were discovered
+
+## Required Smoke Tests
+
+For every release:
+
+```bash
+python3 -m unittest -v
+python3 -m compileall -q src tests
+python3 -m edgebase setup --scope project --agents claude,codex,cursor,gemini,opencode --no-hooks
+python3 -m edgebase doctor --scope project --agents claude,codex,cursor,gemini,opencode
+```
+
+When installed from GitHub, verify:
+
+```bash
+python3 -m pip install --user git+https://github.com/ychampion/edgebase.git
+python3 -m edgebase setup --scope project
+python3 -m edgebase doctor --scope project
+```
+
+## Agent Client Verification
+
+Where binaries are available:
+
+- Claude Code: `claude mcp list`, `claude mcp get edgebase`
+- Codex: `codex mcp list`
+- Gemini CLI: `gemini mcp list`
+- OpenCode: `opencode mcp list`
+
+For clients not installed in the verification environment, validate the generated config shape and the Edgebase MCP stdio handshake.
 
 ## Kill Criteria
 
-- Edgebase does not reduce token cost or tool calls versus plain exploration.
-- Stale graph answers survive branch switches, rebases, file edits, or generated files.
-- Dynamic-language call edges are presented without confidence and provenance.
+Stop or redesign if:
+
+- Edgebase cannot reduce token cost or search/read calls versus plain exploration.
+- Index freshness is unreliable after edits, branch switches, rebases, or generated-file churn.
+- Dynamic-language call graph confidence cannot be represented honestly.
 - Normal onboarding requires Docker, cloud services, API keys, or a graph database.
-- Agents ignore the tool or consistently choose the wrong query shape.
+- Agents ignore the tool even with a minimal marker instruction.
+- Setup cannot be disabled cleanly.
+
+## Reporting
+
+Publish benchmark results with:
+
+- repo name and commit
+- task descriptions
+- exact Edgebase version and command
+- baseline commands
+- raw JSON output
+- manual review notes for false edges and missing context

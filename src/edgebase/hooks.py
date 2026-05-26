@@ -26,6 +26,26 @@ def install_git_hook(root: str | Path) -> Path:
     return hook_path
 
 
+def uninstall_git_hook(root: str | Path) -> Path:
+    repo_root = find_repo_root(root)
+    hook_path = repo_root / ".git" / "hooks" / "post-commit"
+    if not hook_path.exists():
+        return hook_path
+    lines = hook_path.read_text(encoding="utf-8").splitlines()
+    filtered: list[str] = []
+    skip_next = False
+    for line in lines:
+        if skip_next:
+            skip_next = False
+            continue
+        if line.strip() == "# edgebase post-commit hook":
+            skip_next = True
+            continue
+        filtered.append(line)
+    hook_path.write_text("\n".join(filtered).rstrip() + "\n", encoding="utf-8")
+    return hook_path
+
+
 def install_claude_hooks(root: str | Path) -> Path:
     repo_root = Path(root).resolve()
     settings_path = repo_root / ".claude" / "settings.json"
@@ -58,6 +78,7 @@ def install_claude_hooks(root: str | Path) -> Path:
                     {
                         "type": "command",
                         "command": f'"{sys.executable}" -m edgebase hooks claude-post-tool-use --root "{repo_root}"',
+                        "async": True,
                         "timeout": 60,
                     }
                 ],
@@ -65,6 +86,42 @@ def install_claude_hooks(root: str | Path) -> Path:
         )
     settings_path.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return settings_path
+
+
+def uninstall_claude_hooks(root: str | Path) -> Path:
+    repo_root = Path(root).resolve()
+    settings_path = repo_root / ".claude" / "settings.json"
+    if not settings_path.exists():
+        return settings_path
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Refusing to edit invalid JSON: {settings_path}") from exc
+    hooks = settings.get("hooks")
+    if isinstance(hooks, dict):
+        for event_name in ("SessionStart", "PostToolUse"):
+            entries = hooks.get(event_name)
+            if isinstance(entries, list):
+                hooks[event_name] = [entry for entry in entries if not hook_entry_runs_edgebase(entry)]
+        for key in list(hooks):
+            if hooks.get(key) == []:
+                del hooks[key]
+    if hooks == {}:
+        settings.pop("hooks", None)
+    settings_path.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return settings_path
+
+
+def hook_entry_runs_edgebase(entry: object) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    hooks = entry.get("hooks")
+    if not isinstance(hooks, list):
+        return False
+    for hook in hooks:
+        if isinstance(hook, dict) and "edgebase hooks" in str(hook.get("command", "")):
+            return True
+    return False
 
 
 def append_unique(items: list[object], value: object) -> None:
@@ -98,7 +155,7 @@ def handle_claude_session_start(root: str | Path) -> int:
 def handle_claude_post_tool_use(root: str | Path) -> int:
     payload = read_json_stdin()
     repo_root = find_repo_root(root)
-    touched = extract_tool_paths(payload)
+    touched = extract_tool_paths(payload, repo_root)
     if touched:
         index_repo(repo_root, touched, reset=False)
         task = payload.get("prompt") or "recent edit"
@@ -124,7 +181,7 @@ def read_json_stdin() -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def extract_tool_paths(payload: dict[str, Any]) -> list[str]:
+def extract_tool_paths(payload: dict[str, Any], root: str | Path | None = None) -> list[str]:
     tool_input = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
     candidates: list[str] = []
     for key in ("file_path", "path"):
@@ -136,12 +193,12 @@ def extract_tool_paths(payload: dict[str, Any]) -> list[str]:
         for edit in edits:
             if isinstance(edit, dict) and isinstance(edit.get("file_path"), str):
                 candidates.append(edit["file_path"])
-    root = Path(os.environ.get("CLAUDE_PROJECT_DIR") or ".").resolve()
+    base = Path(root or os.environ.get("CLAUDE_PROJECT_DIR") or ".").resolve()
     rels: list[str] = []
     for candidate in candidates:
         path = Path(candidate)
         try:
-            rels.append(path.resolve().relative_to(root).as_posix() if path.is_absolute() else path.as_posix())
+            rels.append(path.resolve().relative_to(base).as_posix() if path.is_absolute() else path.as_posix())
         except ValueError:
             rels.append(path.name)
     return sorted(set(rels))

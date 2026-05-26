@@ -1,128 +1,179 @@
 # Edgebase
 
-Edgebase is a local, git-native context substrate for coding agents. It indexes a repository into a small SQLite graph, records provenance for every fact, and exposes one primary agent tool:
+Edgebase is a local, git-native context layer for coding agents.
+
+It keeps `AGENTS.md` small, indexes the repository into a rebuildable SQLite graph, and exposes one MCP tool that agents can call before editing:
 
 ```text
 edgebase_context(task, changed_files?, budget?)
 ```
 
-The goal is not to dump a code graph into an agent. The goal is to return a compact, source-backed context capsule right before an agent edits code.
+The output is a compact, source-backed context capsule: high-signal files, symbols, imports, conservative call edges, inferred tests, owners, churn, freshness, and provenance. Edgebase is not a vector database, a Neo4j wrapper, or a generic memory product. It is a small local substrate for answering:
+
+> Given this task and current diff, what context should the agent read before touching code?
+
+## Why This Exists
+
+Modern coding agents are good at exploring code, but their default exploration loop is wasteful:
+
+- search broad terms
+- read too many files
+- miss nearby tests or owners
+- carry stale generated architecture summaries
+- repeat the same exploration in every session
+
+Flat instruction files such as `AGENTS.md`, `CLAUDE.md`, and Cursor rules are still useful for human-written project rules. They are a poor place for generated code structure. Edgebase complements those files by keeping generated structure in a local cache and serving fresh context on demand.
 
 ## Install
 
-Paste this in the repository you want your coding agents to understand:
+Run this from the repository you want agents to understand:
 
 ```bash
 python3 -m pip install --user git+https://github.com/ychampion/edgebase.git && python3 -m edgebase setup --scope both
 ```
 
-Then restart Claude Code, Codex, Cursor, Gemini CLI, OpenCode, or Windsurf and ask:
+Then restart your agent or IDE.
+
+Edgebase is enabled by default after setup. To turn it off:
+
+```bash
+python3 -m edgebase disable --scope both
+```
+
+To check the installation:
+
+```bash
+python3 -m edgebase doctor --scope both
+```
+
+## Paste This Into Your Agent
+
+If you want Claude Code, Codex, Cursor, Gemini CLI, OpenCode, or Windsurf to install it for you, paste:
+
+```text
+Install Edgebase for this repository. Run:
+python3 -m pip install --user git+https://github.com/ychampion/edgebase.git && python3 -m edgebase setup --scope both
+
+After setup, restart if needed. Before broad code exploration or edits, use the edgebase_context MCP tool with the task and changed files. If MCP is unavailable, run:
+python3 -m edgebase context "<task>" --budget 1200
+```
+
+## What Setup Changes
+
+`edgebase setup --scope both` makes local, reversible changes:
+
+| Target | Project file | User file | Behavior |
+| --- | --- | --- | --- |
+| Edgebase cache | `.edgebase/index.sqlite3` | none | Rebuildable local graph cache, ignored by git |
+| Agent instructions | `AGENTS.md` marker block | none | Tells agents to call `edgebase_context` before broad exploration |
+| Claude Code | `.mcp.json`, `.claude/settings.json` | none by default | MCP server plus SessionStart/PostToolUse freshness hooks |
+| Codex | `.codex/config.toml` | `~/.codex/config.toml` | MCP server entry |
+| Cursor | `.cursor/mcp.json` | `~/.cursor/mcp.json` | MCP server entry |
+| Gemini CLI | `.gemini/settings.json` | `~/.gemini/settings.json` | MCP server entry |
+| OpenCode | `.opencode.json` | `~/.opencode.json` | Enabled local MCP server |
+| Windsurf | none | `~/.codeium/windsurf/mcp_config.json` | Global MCP server entry |
+| Git | `.git/hooks/post-commit` | none | Refreshes the index after commits |
+
+No Docker, cloud service, graph database, or API key is required.
+
+Setup uses the Python interpreter that ran setup, with `-m edgebase`, instead of assuming GUI agents can see `edgebase` on `PATH`.
+
+## Day-To-Day Usage
+
+Most users do not run Edgebase manually after setup. Agents see the MCP tool and the `AGENTS.md` marker.
+
+Useful manual commands:
+
+```bash
+python3 -m edgebase context "change the auth login flow" --budget 1200
+python3 -m edgebase index --changed
+python3 -m edgebase stats
+python3 -m edgebase doctor --scope both
+python3 -m edgebase disable --scope both
+```
+
+If an MCP client does not use the tool automatically, explicitly ask:
 
 ```text
 Use edgebase_context for this task before editing.
 ```
 
-For local development on Edgebase itself:
-
-```bash
-python3 -m pip install -e .
-edgebase setup --scope project
-python3 -m unittest
-```
-
 ## What It Indexes
 
-- Files, modules, exported symbols, imports, and conservative call edges
+- Source files and language/module identity
+- Exported symbols
+- Imports and conservative call edges
 - Test files and inferred `TESTS` relationships
 - Git owners, recent commits, and churn hotspots
-- Provenance for graph facts: path, line, extractor, confidence, commit, freshness
+- Provenance for every edge: source path, line, extractor, confidence, commit, and freshness
 
-## Quick Start
-
-```bash
-python -m pip install -e .
-edgebase setup --scope project
-edgebase context "change the auth login flow" --budget 1200
-edgebase mcp
-```
-
-`edgebase setup` indexes the repo, creates minimal agent guidance, and configures supported MCP clients where possible. It never needs Docker, Neo4j, cloud services, or API keys.
-
-## MCP
-
-Edgebase runs as a local stdio MCP server:
-
-```bash
-edgebase mcp --root /path/to/repo
-```
-
-The server exposes one tool, `edgebase_context`, with this input:
-
-```json
-{
-  "task": "refactor the login controller",
-  "changed_files": ["src/auth/login.py"],
-  "budget": 1200
-}
-```
+Dynamic-language call graphs are confidence-scored. Low-confidence call edges are leads, not proof.
 
 ## Supported Agents
 
-`edgebase setup --scope both` configures:
+| Agent | Status | Notes |
+| --- | --- | --- |
+| Claude Code | Supported | Project `.mcp.json`; async PostToolUse freshness hook; SessionStart context hook |
+| Codex | Supported | Global `~/.codex/config.toml` MCP entry is the verified CLI path; verify with `codex mcp list` |
+| Cursor | Supported | Project and global `mcp.json`; tools are used when the agent chooses them |
+| Gemini CLI | Supported | Project and global `settings.json` with `mcpServers` |
+| OpenCode | Supported | Local MCP server under `mcp.edgebase`, `enabled: true` |
+| Windsurf | Supported | Global Cascade MCP config |
 
-- Claude Code: project `.mcp.json`, plus optional SessionStart/PostToolUse freshness hooks
-- Codex: `.codex/config.toml` and `~/.codex/config.toml`
-- Cursor: `.cursor/mcp.json` and `~/.cursor/mcp.json`
-- Gemini CLI: `.gemini/settings.json` and `~/.gemini/settings.json`
-- OpenCode: `.opencode.json` and `~/.opencode.json`
-- Windsurf: `~/.codeium/windsurf/mcp_config.json`
+See [Agent Client Setup](docs/AGENT_CLIENTS.md) for client-specific details and verification commands.
 
-Use a narrower install when you only want project-local files:
+## Architecture
 
-```bash
-edgebase setup --scope project --agents claude,codex,cursor,gemini,opencode
+```text
+repo files + git history
+        |
+        v
+extractors -> .edgebase/index.sqlite3 -> context ranker -> edgebase_context
 ```
 
-Use an absolute command if your agent process cannot see `edgebase` on `PATH`:
+The cache is rebuildable. Git remains the source of truth.
 
-```bash
-edgebase setup --scope both --command "$(python3 -c 'import shutil; print(shutil.which("edgebase") or "edgebase")')"
-```
-
-## Hooks
-
-Edgebase starts with practical hooks rather than a custom runtime:
-
-```bash
-edgebase install-hooks --git --claude
-```
-
-- Git `post-commit` refreshes the graph after commits.
-- Claude Code `SessionStart` reports graph freshness.
-- Claude Code `PostToolUse` reindexes edited files and can feed a short freshness note back into the session.
+See [Architecture](docs/ARCHITECTURE.md) and [Validation](docs/VALIDATION.md).
 
 ## Benchmarks
 
-The benchmark harness is intentionally evidence-first:
+Run the included harness:
 
 ```bash
-edgebase benchmark --repo /path/to/repo --tasks benchmarks/tasks.example.jsonl --out results.json
+python3 -m edgebase benchmark --repo /path/to/repo --tasks benchmarks/tasks.example.jsonl --out results.json
 ```
 
-It can compare Edgebase against a plain `rg` baseline immediately. Third-party competitors are opt-in through command templates so results are reproducible without bundling external tools:
+It compares Edgebase against a plain `rg` baseline immediately. External competitors are opt-in through command templates:
 
 - `EDGEBASE_BENCH_CODEGRAPHCONTEXT_CMD`
 - `EDGEBASE_BENCH_CODEBASE_MEMORY_CMD`
 - `EDGEBASE_BENCH_GITNEXUS_CMD`
 
-## Design Rules
+## Development
 
-- Local first: no Docker, Neo4j, cloud, or API keys for the normal path.
-- Rebuildable: `.edgebase/index.sqlite3` is cache, not source of truth.
-- Honest confidence: dynamic call edges are low confidence unless the extractor can prove more.
-- Small surface: one task-router MCP tool is preferred over many graph tools.
-- Minimal instructions: `AGENTS.md` should hold non-inferable rules and point to Edgebase for fresh structure.
+```bash
+git clone https://github.com/ychampion/edgebase.git
+cd edgebase
+python3 -m pip install -e .
+python3 -m unittest -v
+python3 -m compileall -q src tests
+```
 
-## Current Status
+Smoke-test MCP stdio:
 
-This is an alpha OSS prototype. Python extraction is strongest because it uses `ast`; JavaScript/TypeScript, Go, and Rust extraction is intentionally conservative and confidence-scored. The benchmark harness is included so improvements can be judged against plain search and competing MCP graph tools.
+```bash
+python3 -m edgebase mcp --root "$PWD"
+```
+
+## Project Status
+
+Edgebase is early OSS software. The production bar for this project is:
+
+- local-first install
+- no required services
+- reversible setup
+- honest confidence and provenance
+- small agent-facing tool surface
+- public benchmark harness
+
+The first mature target is not graph visualization. It is reliably reducing agent search/read overhead without lowering patch quality.

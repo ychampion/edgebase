@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .benchmark import run_benchmark
 from .context import build_context
+from .doctor import run_doctor
 from .git import changed_files, find_repo_root
 from .hooks import (
     handle_claude_post_tool_use,
@@ -17,7 +18,7 @@ from .hooks import (
 )
 from .indexer import index_repo
 from .mcp import serve
-from .setup import ALL_AGENTS, setup_repo
+from .setup import ALL_AGENTS, disable_repo, setup_repo
 from .store import Store
 
 
@@ -39,15 +40,18 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
 
     init_p = sub.add_parser("init", help="Create local Edgebase state and optional agent instructions.")
+    add_subcommand_root(init_p)
     init_p.add_argument("--write-agents-md", action="store_true", help="Write a minimal AGENTS.md if missing.")
     init_p.set_defaults(func=cmd_init)
 
     index_p = sub.add_parser("index", help="Build or refresh the local graph index.")
+    add_subcommand_root(index_p)
     index_p.add_argument("--changed", action="store_true", help="Only reindex files changed in git status.")
     index_p.add_argument("--file", action="append", default=[], help="Repository-relative file to reindex.")
     index_p.set_defaults(func=cmd_index)
 
     setup_p = sub.add_parser("setup", help="Index repo and configure supported coding agents.")
+    add_subcommand_root(setup_p)
     setup_p.add_argument(
         "--agents",
         default="all",
@@ -71,12 +75,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     setup_p.add_argument(
         "--command",
-        default="edgebase",
-        help="Command MCP clients should run. Use an absolute path if edgebase is not on PATH.",
+        default=None,
+        help="Executable MCP clients should run. Defaults to the current Python with `-m edgebase`.",
     )
     setup_p.set_defaults(func=cmd_setup)
 
+    disable_p = sub.add_parser("disable", help="Turn off Edgebase agent integrations for this repo.")
+    add_subcommand_root(disable_p)
+    disable_p.add_argument(
+        "--agents",
+        default="all",
+        help=f"Comma-separated agents to disable. Supported: all,{','.join(ALL_AGENTS)}.",
+    )
+    disable_p.add_argument(
+        "--scope",
+        choices=("project", "global", "both"),
+        default="project",
+        help="Where to remove or disable supported MCP configs.",
+    )
+    disable_p.add_argument("--keep-hooks", action="store_true", help="Leave git and Claude Code hooks installed.")
+    disable_p.add_argument("--keep-agent-docs", action="store_true", help="Leave AGENTS.md Edgebase instructions in place.")
+    disable_p.set_defaults(func=cmd_disable)
+
     context_p = sub.add_parser("context", help="Return a compact context capsule for a task.")
+    add_subcommand_root(context_p)
     context_p.add_argument("task", help="Coding task or investigation goal.")
     context_p.add_argument("--changed-file", action="append", default=[], help="Changed file hint.")
     context_p.add_argument("--budget", type=int, default=1200, help="Approximate token budget.")
@@ -84,32 +106,64 @@ def build_parser() -> argparse.ArgumentParser:
     context_p.set_defaults(func=cmd_context)
 
     mcp_p = sub.add_parser("mcp", help="Run the Edgebase MCP server over stdio.")
+    add_subcommand_root(mcp_p)
     mcp_p.set_defaults(func=cmd_mcp)
 
     hooks_p = sub.add_parser("install-hooks", help="Install git and/or Claude Code hooks.")
+    add_subcommand_root(hooks_p)
     hooks_p.add_argument("--git", action="store_true", help="Install git post-commit hook.")
     hooks_p.add_argument("--claude", action="store_true", help="Install Claude Code hooks.")
     hooks_p.set_defaults(func=cmd_install_hooks)
 
     hook_p = sub.add_parser("hooks", help=argparse.SUPPRESS)
+    add_subcommand_root(hook_p)
     hook_sub = hook_p.add_subparsers(dest="hook_command")
     git_hook = hook_sub.add_parser("git-post-commit")
+    add_subcommand_root(git_hook)
     git_hook.set_defaults(func=lambda args: handle_git_post_commit(args.root))
     session_hook = hook_sub.add_parser("claude-session-start")
+    add_subcommand_root(session_hook)
     session_hook.set_defaults(func=lambda args: handle_claude_session_start(args.root))
     post_hook = hook_sub.add_parser("claude-post-tool-use")
+    add_subcommand_root(post_hook)
     post_hook.set_defaults(func=lambda args: handle_claude_post_tool_use(args.root))
 
     bench_p = sub.add_parser("benchmark", help="Run the validation benchmark harness.")
+    add_subcommand_root(bench_p)
     bench_p.add_argument("--repo", required=True, help="Repository to benchmark.")
     bench_p.add_argument("--tasks", required=True, help="JSONL task file.")
     bench_p.add_argument("--out", required=True, help="Output JSON file.")
     bench_p.set_defaults(func=cmd_benchmark)
 
     stats_p = sub.add_parser("stats", help="Show local index stats.")
+    add_subcommand_root(stats_p)
     stats_p.set_defaults(func=cmd_stats)
 
+    doctor_p = sub.add_parser("doctor", help="Check index, MCP stdio, and configured agent clients.")
+    add_subcommand_root(doctor_p)
+    doctor_p.add_argument(
+        "--agents",
+        default="all",
+        help=f"Comma-separated agents to check. Supported: all,{','.join(ALL_AGENTS)}.",
+    )
+    doctor_p.add_argument(
+        "--scope",
+        choices=("project", "global", "both"),
+        default="project",
+        help="Which config scope to check.",
+    )
+    doctor_p.add_argument("--json", action="store_true", help="Emit machine-readable check results.")
+    doctor_p.set_defaults(func=cmd_doctor)
+
     return parser
+
+
+def add_subcommand_root(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--root",
+        default=argparse.SUPPRESS,
+        help="Repository root or any path inside it. May appear before or after the subcommand.",
+    )
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -162,7 +216,27 @@ def cmd_setup(args: argparse.Namespace) -> int:
     for result in results:
         print(f"{result.action}: {result.path} ({result.detail})")
     print("")
+    print("Edgebase is enabled for the selected agents.")
     print("Restart your agent/IDE, then ask it: `Use edgebase_context for this task before editing.`")
+    print("Turn it off with: `edgebase disable --scope {}`".format(args.scope))
+    return 0
+
+
+def cmd_disable(args: argparse.Namespace) -> int:
+    root = find_repo_root(args.root)
+    try:
+        results = disable_repo(
+            root,
+            agents=[args.agents],
+            scope=args.scope,
+            remove_hooks=not args.keep_hooks,
+            remove_agent_docs=not args.keep_agent_docs,
+        )
+    except (RuntimeError, ValueError) as exc:
+        print(f"disable failed: {exc}", file=sys.stderr)
+        return 1
+    for result in results:
+        print(f"{result.action}: {result.path} ({result.detail})")
     return 0
 
 
@@ -219,3 +293,17 @@ def cmd_stats(args: argparse.Namespace) -> int:
         return 1
     print(json.dumps(store.stats(), indent=2, sort_keys=True))
     return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    try:
+        checks = run_doctor(args.root, [args.agents], args.scope)
+    except ValueError as exc:
+        print(f"doctor failed: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps([check.__dict__ for check in checks], indent=2, sort_keys=True))
+    else:
+        for check in checks:
+            print(f"{check.status.upper():5} {check.name}: {check.detail}")
+    return 1 if any(check.status == "fail" for check in checks) else 0

@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from .hooks import install_claude_hooks, install_git_hook
+from .hooks import install_claude_hooks, install_git_hook, uninstall_claude_hooks, uninstall_git_hook
 from .indexer import index_repo
 
 
 ALL_AGENTS = ("claude", "codex", "cursor", "gemini", "opencode", "windsurf")
+AGENT_DOC_START = "<!-- EDGEBASE:START -->"
+AGENT_DOC_END = "<!-- EDGEBASE:END -->"
 
 
 @dataclass(frozen=True)
@@ -25,7 +28,7 @@ def setup_repo(
     scope: str = "project",
     install_hooks: bool = True,
     write_agents_md: bool = True,
-    command: str = "edgebase",
+    command: str | None = None,
 ) -> list[SetupResult]:
     repo_root = Path(root).resolve()
     selected = normalize_agents(agents)
@@ -61,6 +64,35 @@ def setup_repo(
     return results
 
 
+def disable_repo(
+    root: str | Path,
+    agents: list[str] | None = None,
+    scope: str = "project",
+    remove_hooks: bool = True,
+    remove_agent_docs: bool = True,
+) -> list[SetupResult]:
+    repo_root = Path(root).resolve()
+    selected = normalize_agents(agents)
+    results: list[SetupResult] = []
+    if "claude" in selected:
+        results.extend(disable_claude(repo_root, scope, remove_hooks))
+    if "codex" in selected:
+        results.extend(disable_codex(repo_root, scope))
+    if "cursor" in selected:
+        results.extend(disable_cursor(repo_root, scope))
+    if "gemini" in selected:
+        results.extend(disable_gemini(repo_root, scope))
+    if "opencode" in selected:
+        results.extend(disable_opencode(repo_root, scope))
+    if "windsurf" in selected:
+        results.extend(disable_windsurf(scope))
+    if remove_hooks:
+        results.append(SetupResult(uninstall_git_hook(repo_root), "updated", "removed git post-commit refresh hook"))
+    if remove_agent_docs:
+        results.append(remove_agent_docs_block(repo_root))
+    return results
+
+
 def normalize_agents(agents: list[str] | None) -> set[str]:
     if not agents:
         return set(ALL_AGENTS)
@@ -77,38 +109,78 @@ def normalize_agents(agents: list[str] | None) -> set[str]:
     return normalized
 
 
-def stdio_config(repo_root: Path, command: str = "edgebase") -> dict[str, object]:
-    return {"command": command, "args": ["mcp", "--root", str(repo_root)], "env": {}}
+def stdio_config(repo_root: Path, command: str | None = None) -> dict[str, object]:
+    executable, prefix = command_parts(command)
+    return {"command": executable, "args": [*prefix, "mcp", "--root", str(repo_root)], "env": {}}
+
+
+def command_parts(command: str | None = None) -> tuple[str, list[str]]:
+    if command:
+        return command, []
+    return sys.executable, ["-m", "edgebase"]
+
+
+def command_array(repo_root: Path, command: str | None = None) -> list[str]:
+    executable, prefix = command_parts(command)
+    return [executable, *prefix, "mcp", "--root", str(repo_root)]
 
 
 def write_agent_docs(repo_root: Path) -> SetupResult:
     agents_path = repo_root / "AGENTS.md"
-    snippet = (
-        "# Agent Instructions\n\n"
-        "Keep static instructions minimal. For current codebase structure, use Edgebase before broad exploration:\n\n"
-        "```bash\n"
-        "edgebase context \"<task>\" --budget 1200\n"
-        "```\n\n"
-        "Prefer the MCP tool `edgebase_context` when it is available.\n"
-    )
+    snippet = agent_docs_block()
     if not agents_path.exists():
-        agents_path.write_text(snippet, encoding="utf-8")
+        agents_path.write_text("# Agent Instructions\n\n" + snippet, encoding="utf-8")
         return SetupResult(agents_path, "created", "minimal agent instructions")
-    edgebase_doc = repo_root / "EDGEBASE.md"
-    edgebase_doc.write_text(
-        "# Edgebase Agent Context\n\n"
-        "Use Edgebase for fresh, source-backed structure instead of adding generated architecture summaries to AGENTS.md.\n\n"
+    existing = agents_path.read_text(encoding="utf-8")
+    if AGENT_DOC_START in existing and AGENT_DOC_END in existing:
+        updated = replace_agent_docs_block(existing, snippet)
+        action = "updated"
+    else:
+        updated = existing.rstrip() + "\n\n" + snippet
+        action = "updated"
+    agents_path.write_text(updated, encoding="utf-8")
+    return SetupResult(agents_path, action, "Edgebase agent instructions")
+
+
+def agent_docs_block() -> str:
+    return (
+        f"{AGENT_DOC_START}\n"
+        "## Edgebase Context\n\n"
+        "Edgebase is enabled for this repository. Before broad code exploration or edits, call the MCP tool "
+        "`edgebase_context` with the task and any changed files. Use it to get a small, source-backed context "
+        "capsule instead of loading generated architecture summaries.\n\n"
+        "Fallback when MCP tools are unavailable:\n\n"
         "```bash\n"
         "edgebase context \"<task>\" --budget 1200\n"
         "```\n\n"
-        "MCP tool name: `edgebase_context`.\n",
-        encoding="utf-8",
+        "Keep static instructions here minimal; Edgebase supplies fresh structure, symbols, tests, owners, "
+        "and change-hotspot context from the local git working tree. Refresh manually with "
+        "`edgebase index --changed` after edits, or disable with `edgebase disable --scope both`.\n"
+        f"{AGENT_DOC_END}\n"
     )
-    return SetupResult(edgebase_doc, "created", "AGENTS.md existed; wrote Edgebase agent note")
+
+
+def replace_agent_docs_block(content: str, block: str) -> str:
+    pattern = re.compile(
+        rf"(?ms)^{re.escape(AGENT_DOC_START)}\n.*?^{re.escape(AGENT_DOC_END)}\n?"
+    )
+    return pattern.sub(block, content).rstrip() + "\n"
+
+
+def remove_agent_docs_block(repo_root: Path) -> SetupResult:
+    agents_path = repo_root / "AGENTS.md"
+    if not agents_path.exists():
+        return SetupResult(agents_path, "skipped", "AGENTS.md not found")
+    existing = agents_path.read_text(encoding="utf-8")
+    if AGENT_DOC_START not in existing:
+        return SetupResult(agents_path, "skipped", "Edgebase agent instructions not found")
+    updated = replace_agent_docs_block(existing, "").strip() + "\n"
+    agents_path.write_text(updated, encoding="utf-8")
+    return SetupResult(agents_path, "updated", "removed Edgebase agent instructions")
 
 
 def setup_claude(
-    repo_root: Path, scope: str, install_hooks: bool, command: str
+    repo_root: Path, scope: str, install_hooks: bool, command: str | None
 ) -> list[SetupResult]:
     results: list[SetupResult] = []
     if scope in {"project", "both"}:
@@ -129,12 +201,18 @@ def setup_claude(
     return results
 
 
-def setup_codex(repo_root: Path, scope: str, command: str) -> list[SetupResult]:
+def setup_codex(repo_root: Path, scope: str, command: str | None) -> list[SetupResult]:
     results: list[SetupResult] = []
     if scope in {"project", "both"}:
         path = repo_root / ".codex" / "config.toml"
         upsert_codex_toml(path, repo_root, command)
-        results.append(SetupResult(path, "updated", "Codex project MCP server"))
+        results.append(
+            SetupResult(
+                path,
+                "updated",
+                "Codex project MCP server (use --scope global or both for current Codex CLI discovery)",
+            )
+        )
     if scope in {"global", "both"}:
         path = Path.home() / ".codex" / "config.toml"
         upsert_codex_toml(path, repo_root, command)
@@ -142,7 +220,7 @@ def setup_codex(repo_root: Path, scope: str, command: str) -> list[SetupResult]:
     return results
 
 
-def setup_cursor(repo_root: Path, scope: str, command: str) -> list[SetupResult]:
+def setup_cursor(repo_root: Path, scope: str, command: str | None) -> list[SetupResult]:
     results: list[SetupResult] = []
     if scope in {"project", "both"}:
         path = repo_root / ".cursor" / "mcp.json"
@@ -155,7 +233,7 @@ def setup_cursor(repo_root: Path, scope: str, command: str) -> list[SetupResult]
     return results
 
 
-def setup_gemini(repo_root: Path, scope: str, command: str) -> list[SetupResult]:
+def setup_gemini(repo_root: Path, scope: str, command: str | None) -> list[SetupResult]:
     results: list[SetupResult] = []
     if scope in {"project", "both"}:
         path = repo_root / ".gemini" / "settings.json"
@@ -168,11 +246,11 @@ def setup_gemini(repo_root: Path, scope: str, command: str) -> list[SetupResult]
     return results
 
 
-def setup_opencode(repo_root: Path, scope: str, command: str) -> list[SetupResult]:
+def setup_opencode(repo_root: Path, scope: str, command: str | None) -> list[SetupResult]:
     results: list[SetupResult] = []
     value = {
         "type": "local",
-        "command": [command, "mcp", "--root", str(repo_root)],
+        "command": command_array(repo_root, command),
         "enabled": True,
     }
     if scope in {"project", "both"}:
@@ -186,7 +264,7 @@ def setup_opencode(repo_root: Path, scope: str, command: str) -> list[SetupResul
     return results
 
 
-def setup_windsurf(repo_root: Path, scope: str, command: str) -> list[SetupResult]:
+def setup_windsurf(repo_root: Path, scope: str, command: str | None) -> list[SetupResult]:
     if scope not in {"global", "both"}:
         return [
             SetupResult(
@@ -202,6 +280,10 @@ def setup_windsurf(repo_root: Path, scope: str, command: str) -> list[SetupResul
 
 def merge_mcp_json(path: Path, name: str, config: dict[str, object]) -> None:
     merge_json_object(path, ("mcpServers",), name, config)
+
+
+def remove_mcp_json(path: Path, name: str) -> bool:
+    return remove_json_object(path, ("mcpServers",), name)
 
 
 def merge_json_object(
@@ -232,11 +314,37 @@ def merge_json_object(
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def upsert_codex_toml(path: Path, repo_root: Path, command: str) -> None:
+def remove_json_object(path: Path, container_path: tuple[str, ...], key: str) -> bool:
+    if not path.exists():
+        return False
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Invalid JSON in {path}: {exc}") from exc
+    if not isinstance(loaded, dict):
+        return False
+    cursor: dict[str, object] = loaded
+    for part in container_path:
+        next_value = cursor.get(part)
+        if not isinstance(next_value, dict):
+            return False
+        cursor = next_value
+    if key not in cursor:
+        return False
+    del cursor[key]
+    path.write_text(json.dumps(loaded, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return True
+
+
+def upsert_codex_toml(path: Path, repo_root: Path, command: str | None) -> None:
+    executable, prefix = command_parts(command)
+    args = [*prefix, "mcp", "--root", str(repo_root)]
+    args_literal = ", ".join(f'"{escape_toml(arg)}"' for arg in args)
     section = (
         "[mcp_servers.edgebase]\n"
-        f'command = "{escape_toml(command)}"\n'
-        f'args = ["mcp", "--root", "{escape_toml(str(repo_root))}"]\n'
+        f'command = "{escape_toml(executable)}"\n'
+        f"args = [{args_literal}]\n"
+        "enabled = true\n"
     )
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
     pattern = re.compile(r"(?ms)^\[mcp_servers\.edgebase\]\n.*?(?=^\[|\Z)")
@@ -250,3 +358,113 @@ def upsert_codex_toml(path: Path, repo_root: Path, command: str) -> None:
 
 def escape_toml(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def remove_codex_toml(path: Path) -> bool:
+    if not path.exists():
+        return False
+    existing = path.read_text(encoding="utf-8")
+    pattern = re.compile(r"(?ms)^\[mcp_servers\.edgebase\]\n.*?(?=^\[|\Z)")
+    updated, count = pattern.subn("", existing)
+    if count == 0:
+        return False
+    path.write_text(updated.rstrip() + ("\n" if updated.strip() else ""), encoding="utf-8")
+    return True
+
+
+def disable_claude(repo_root: Path, scope: str, remove_hooks: bool) -> list[SetupResult]:
+    results: list[SetupResult] = []
+    if scope in {"project", "both"}:
+        path = repo_root / ".mcp.json"
+        action = "updated" if remove_mcp_json(path, "edgebase") else "skipped"
+        results.append(SetupResult(path, action, "Claude Code project MCP server removed"))
+        if remove_hooks:
+            hooks_path = uninstall_claude_hooks(repo_root)
+            results.append(SetupResult(hooks_path, "updated", "removed Claude Code freshness hooks"))
+    if scope in {"global", "both"}:
+        results.append(
+            SetupResult(
+                Path.home() / ".claude.json",
+                "skipped",
+                "Claude user-scoped servers are managed by `claude mcp remove edgebase --scope user`",
+            )
+        )
+    return results
+
+
+def disable_codex(repo_root: Path, scope: str) -> list[SetupResult]:
+    results: list[SetupResult] = []
+    if scope in {"project", "both"}:
+        path = repo_root / ".codex" / "config.toml"
+        action = "updated" if remove_codex_toml(path) else "skipped"
+        results.append(SetupResult(path, action, "Codex project MCP server removed"))
+    if scope in {"global", "both"}:
+        path = Path.home() / ".codex" / "config.toml"
+        action = "updated" if remove_codex_toml(path) else "skipped"
+        results.append(SetupResult(path, action, "Codex global MCP server removed"))
+    return results
+
+
+def disable_cursor(repo_root: Path, scope: str) -> list[SetupResult]:
+    return disable_json_mcp(repo_root, scope, ".cursor/mcp.json", Path.home() / ".cursor" / "mcp.json", "Cursor")
+
+
+def disable_gemini(repo_root: Path, scope: str) -> list[SetupResult]:
+    return disable_json_mcp(
+        repo_root, scope, ".gemini/settings.json", Path.home() / ".gemini" / "settings.json", "Gemini CLI"
+    )
+
+
+def disable_windsurf(scope: str) -> list[SetupResult]:
+    path = Path.home() / ".codeium" / "windsurf" / "mcp_config.json"
+    if scope not in {"global", "both"}:
+        return [SetupResult(path, "skipped", "Windsurf only has a global MCP config")]
+    action = "updated" if remove_mcp_json(path, "edgebase") else "skipped"
+    return [SetupResult(path, action, "Windsurf global MCP server removed")]
+
+
+def disable_json_mcp(
+    repo_root: Path, scope: str, project_rel: str, global_path: Path, label: str
+) -> list[SetupResult]:
+    results: list[SetupResult] = []
+    if scope in {"project", "both"}:
+        path = repo_root / project_rel
+        action = "updated" if remove_mcp_json(path, "edgebase") else "skipped"
+        results.append(SetupResult(path, action, f"{label} project MCP server removed"))
+    if scope in {"global", "both"}:
+        action = "updated" if remove_mcp_json(global_path, "edgebase") else "skipped"
+        results.append(SetupResult(global_path, action, f"{label} global MCP server removed"))
+    return results
+
+
+def disable_opencode(repo_root: Path, scope: str) -> list[SetupResult]:
+    results: list[SetupResult] = []
+    if scope in {"project", "both"}:
+        path = repo_root / ".opencode.json"
+        action = "updated" if set_opencode_enabled(path, False) else "skipped"
+        results.append(SetupResult(path, action, "OpenCode project MCP server disabled"))
+    if scope in {"global", "both"}:
+        path = Path.home() / ".opencode.json"
+        action = "updated" if set_opencode_enabled(path, False) else "skipped"
+        results.append(SetupResult(path, action, "OpenCode global MCP server disabled"))
+    return results
+
+
+def set_opencode_enabled(path: Path, enabled: bool) -> bool:
+    if not path.exists():
+        return False
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Invalid JSON in {path}: {exc}") from exc
+    if not isinstance(loaded, dict):
+        return False
+    mcp = loaded.get("mcp")
+    if not isinstance(mcp, dict):
+        return False
+    edgebase = mcp.get("edgebase")
+    if not isinstance(edgebase, dict):
+        return False
+    edgebase["enabled"] = enabled
+    path.write_text(json.dumps(loaded, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return True

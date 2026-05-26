@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "edgebase"
-version = "0.1.0"
+version = "0.1.1"
 description = "Git-native, provenance-backed context capsules for coding agents."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -15,9 +15,13 @@ classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
   "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "Topic :: Software Development",
+  "Topic :: Software Development :: Version Control :: Git",
+  "Typing :: Typed",
 ]
 dependencies = []
 
@@ -31,3 +35,6 @@ edgebase = "edgebase.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+edgebase = ["py.typed"]

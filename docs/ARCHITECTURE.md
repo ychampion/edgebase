@@ -1,41 +1,113 @@
 # Architecture
 
-Edgebase is deliberately small:
+Edgebase has one job: return the smallest useful, source-backed context capsule for a coding task.
 
 ```text
-repo files + git history
+git working tree + git history
         |
         v
-extractors -> SQLite graph cache -> context ranker -> edgebase_context MCP tool
+language extractors
+        |
+        v
+.edgebase/index.sqlite3
+        |
+        v
+context ranker
+        |
+        v
+edgebase_context(task, changed_files?, budget?)
 ```
+
+## Design Constraints
+
+- **Local first:** no Docker, Neo4j, cloud service, or API key for the normal path.
+- **Git native:** the index is a cache; git and the working tree remain the source of truth.
+- **Agent shaped:** expose one task-router tool, not a pile of low-level graph queries.
+- **Honest uncertainty:** every edge carries extractor, source path, source line, commit, freshness, and confidence.
+- **Reversible setup:** `edgebase disable` removes or disables generated integrations.
 
 ## Graph Cache
 
-The cache lives at `.edgebase/index.sqlite3` and is rebuildable. It stores:
+The cache lives at `.edgebase/index.sqlite3`.
 
-- files: path, language, module, hash, test marker, indexed commit
-- symbols: name, kind, file, line, signature, exported marker, confidence
-- edges: typed relationships with provenance and confidence
-- file metrics: churn, owner, recent commits
+Tables:
 
-Every edge records source path, line, extractor, confidence, commit, and freshness.
+- `files`: repository-relative path, language, module, content hash, test marker, indexed commit.
+- `symbols`: name, kind, file, line, signature, exported marker, confidence.
+- `edges`: typed relationships with source path, line, extractor, confidence, commit, freshness.
+- `file_metrics`: owner, author counts, recent commits, churn count.
+
+The cache can be deleted at any time and rebuilt with:
+
+```bash
+python3 -m edgebase index
+```
 
 ## Extraction
 
-- Python uses `ast` for imports, classes, functions, and conservative call names.
-- JavaScript/TypeScript use regex extractors with lower confidence.
-- Go/Rust/generic source use shallow symbol and import patterns with lower confidence.
+Current extractors are deliberately conservative:
 
-Low-confidence relationships are still useful for orientation, but agents should treat them as leads rather than proof.
+- Python uses `ast` for imports, classes, functions, and call-name extraction.
+- JavaScript/TypeScript use shallow regex extraction and lower confidence.
+- Go, Rust, and other languages use shallow symbol/import patterns.
+- Tests are inferred from common test path and filename conventions.
 
-## Context Routing
+Dynamic call edges are not presented as facts. They are low-confidence leads unless the extractor can prove more.
+
+## Freshness
+
+Freshness is checked with file hashes. A context capsule reports stale files when the working tree no longer matches the indexed hash.
+
+Freshness paths:
+
+- `edgebase index`: full rebuild.
+- `edgebase index --changed`: incremental refresh for git-changed files.
+- Git `post-commit` hook: refresh after commits.
+- Claude Code `PostToolUse` hook: async refresh after Write/Edit/MultiEdit.
+- MCP server startup: indexes the repo automatically if no cache exists.
+
+## Context Ranking
 
 `edgebase_context` ranks files using:
 
-- explicit changed-file hints
-- task-token matches against path, module, symbols, and relationships
+- explicit `changed_files`
+- task-token matches against paths, modules, symbols, and edges
 - graph neighbors of changed files
-- churn hotspots
 - inferred tests
+- churn hotspots
 
-The returned capsule includes only high-signal files, symbols, relationships, next reads, and a machine summary.
+The returned capsule includes:
+
+- high-signal files
+- relevant symbols
+- source-backed relationships
+- stale-file warnings
+- next reads
+- machine-readable summary
+
+## Agent Integration Boundary
+
+Edgebase does not try to control agents. It gives them a reliable tool and a small instruction marker:
+
+```text
+Before broad code exploration or edits, call edgebase_context.
+```
+
+Claude Code has hook support, so Edgebase can also provide SessionStart freshness context and async edit refresh. Other clients are MCP-first until their hook semantics are stable and documented.
+
+## Failure Modes
+
+Expected safe failures:
+
+- missing MCP client binary: config can still be written and later used by that client
+- stale index: capsule reports stale files and suggests refresh
+- unsupported language: file still appears as source, but relationships may be sparse
+- dynamic-language calls: low confidence
+- invalid existing JSON config: setup refuses to overwrite
+
+Unsafe failures Edgebase must avoid:
+
+- silently overwriting unrelated agent config
+- requiring external services for local use
+- presenting inferred edges as certain
+- bloating agent context with raw graph dumps
