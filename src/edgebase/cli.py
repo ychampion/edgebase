@@ -9,7 +9,9 @@ from .benchmark import run_benchmark
 from .context import build_context
 from .doctor import run_doctor
 from .git import changed_files, find_repo_root
+from .goal import build_goal_capsule, build_patch_passport
 from .hooks import (
+    handle_claude_pre_tool_use,
     handle_claude_post_tool_use,
     handle_claude_session_start,
     handle_claude_user_prompt_submit,
@@ -111,6 +113,27 @@ def build_parser() -> argparse.ArgumentParser:
     context_p.add_argument("--json", action="store_true", help="Emit JSON with markdown and metadata.")
     context_p.set_defaults(func=cmd_context)
 
+    goal_p = sub.add_parser("goal", help="Return an executable Goal Capsule and pre-edit Work Contract.")
+    add_subcommand_root(goal_p)
+    goal_p.add_argument("goal", help="Coding goal to turn into a work contract.")
+    goal_p.add_argument("--changed-file", action="append", default=[], help="Changed file hint.")
+    goal_p.add_argument("--budget", type=int, default=1200, help="Approximate token budget.")
+    goal_p.add_argument("--json", action="store_true", help="Emit the Work Contract JSON schema.")
+    goal_p.set_defaults(func=cmd_goal)
+
+    passport_p = sub.add_parser("passport", help="Return a Patch Passport for the current working tree.")
+    add_subcommand_root(passport_p)
+    passport_p.add_argument("goal", help="Goal the patch is meant to satisfy.")
+    passport_p.add_argument("--changed-file", action="append", default=[], help="Changed file hint.")
+    passport_p.add_argument(
+        "--test",
+        action="append",
+        default=[],
+        help='Explicit test evidence, for example "python3 -m unittest -v: pass".',
+    )
+    passport_p.add_argument("--budget", type=int, default=1200, help="Approximate token budget.")
+    passport_p.set_defaults(func=cmd_passport)
+
     mcp_p = sub.add_parser("mcp", help="Run the Edgebase MCP server over stdio.")
     add_subcommand_root(mcp_p)
     mcp_p.set_defaults(func=cmd_mcp)
@@ -133,6 +156,9 @@ def build_parser() -> argparse.ArgumentParser:
     prompt_hook = hook_sub.add_parser("claude-user-prompt-submit")
     add_subcommand_root(prompt_hook)
     prompt_hook.set_defaults(func=lambda args: handle_claude_user_prompt_submit(args.root))
+    pre_hook = hook_sub.add_parser("claude-pre-tool-use")
+    add_subcommand_root(pre_hook)
+    pre_hook.set_defaults(func=lambda args: handle_claude_pre_tool_use(args.root))
     post_hook = hook_sub.add_parser("claude-post-tool-use")
     add_subcommand_root(post_hook)
     post_hook.set_defaults(func=lambda args: handle_claude_post_tool_use(args.root))
@@ -185,7 +211,8 @@ def cmd_init(args: argparse.Namespace) -> int:
             agents_path.write_text(
                 "# Agent Instructions\n\n"
                 "Keep static instructions minimal. For codebase structure, run:\n\n"
-                "```bash\nedgebase context \"<task>\" --budget 1200\n```\n",
+                "```bash\nedgebase context \"<task>\" --budget 1200\n"
+                "edgebase goal \"<goal>\" --budget 1200\n```\n",
                 encoding="utf-8",
             )
     print(f"Initialized Edgebase at {root / '.edgebase'}")
@@ -270,6 +297,21 @@ def cmd_context(args: argparse.Namespace) -> int:
         )
     else:
         print(capsule.markdown)
+    return 0
+
+
+def cmd_goal(args: argparse.Namespace) -> int:
+    capsule = build_goal_capsule(args.root, args.goal, args.changed_file, args.budget)
+    if args.json:
+        print(json.dumps(capsule.contract.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(capsule.markdown)
+    return 0
+
+
+def cmd_passport(args: argparse.Namespace) -> int:
+    passport = build_patch_passport(args.root, args.goal, args.test, args.changed_file, args.budget)
+    print(passport.markdown)
     return 0
 
 

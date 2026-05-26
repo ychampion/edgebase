@@ -1,6 +1,6 @@
 # Architecture
 
-Edgebase has one job: return the smallest useful, source-backed context capsule for a coding task.
+Edgebase has one job: return the smallest useful, source-backed work contract for a coding task.
 
 ```text
 git working tree + git history
@@ -16,13 +16,14 @@ context ranker
         |
         v
 edgebase_context(task, changed_files?, budget?)
+edgebase_goal(goal, changed_files?, budget?)
 ```
 
 ## Design Constraints
 
 - **Local first:** no Docker, Neo4j, cloud service, or API key for the normal path.
 - **Git native:** the index is a cache; git and the working tree remain the source of truth.
-- **Agent shaped:** expose one task-router tool, not a pile of low-level graph queries.
+- **Agent shaped:** expose small task-router tools, not a pile of low-level graph queries.
 - **Honest uncertainty:** every edge carries extractor, source path, source line, commit, freshness, and confidence.
 - **Reversible setup:** `edgebase disable` removes or disables generated integrations.
 
@@ -56,7 +57,7 @@ Dynamic call edges are not presented as facts. They are low-confidence leads unl
 
 ## Freshness
 
-Freshness is checked with file hashes. A context capsule reports stale files when the working tree no longer matches the indexed hash.
+Freshness is checked with file hashes. A context or goal capsule reports stale files when the working tree no longer matches the indexed hash.
 
 Freshness paths:
 
@@ -64,7 +65,8 @@ Freshness paths:
 - `edgebase index --changed`: incremental refresh for git-changed files.
 - Git `post-commit` hook: refresh after commits.
 - Claude Code `UserPromptSubmit` hook: inject a small context capsule next to likely coding prompts.
-- Claude Code `PostToolUse` hook: async refresh after Write/Edit/MultiEdit.
+- Claude Code `PreToolUse` hook: inject a pre-edit Work Contract before Write/Edit/MultiEdit.
+- Claude Code `PostToolUse` hook: async refresh and edit-delta reporting after Write/Edit/MultiEdit.
 - MCP server startup: indexes the repo automatically if no cache exists.
 
 ## Context Ranking
@@ -86,22 +88,35 @@ The returned capsule includes:
 - next reads
 - machine-readable summary
 
+## Goal Capsules
+
+`edgebase_goal` and `edgebase goal` use the same graph ranking path, then reshape the result into an executable work contract:
+
+- Goal Capsule Markdown for agents and humans.
+- Work Contract JSON for structured consumers.
+- stable `repo_commit` and `worktree_fingerprint`.
+- read-first files, blast radius, protected areas, tests, risks, uncertainties, and provenance.
+
+`edgebase passport` runs after edits and produces a Patch Passport from the current diff plus explicit test evidence. Edgebase records only tests supplied with `--test`; it never infers that a check passed.
+
 ## Agent Integration Boundary
 
 Edgebase does not try to control agents. It gives them a reliable tool, a small instruction marker, and client-specific automation where the client has documented hooks:
 
 ```text
-Use injected Edgebase context when present; otherwise call edgebase_context before broad exploration or edits.
+Use injected Edgebase context when present; otherwise call edgebase_context or edgebase_goal before broad exploration or edits.
 ```
 
 Claude Code has documented prompt and tool hooks, so Edgebase provides:
 
 - `UserPromptSubmit`: prompt-time context capsule before Claude explores.
 - `SessionStart`: freshness summary when a session opens.
-- `PostToolUse`: async refresh after Write/Edit/MultiEdit.
+- `PreToolUse`: pre-edit Work Contract before Write/Edit/MultiEdit.
+- `PostToolUse`: async refresh and edit delta after Write/Edit/MultiEdit.
 - project skill `/edgebase <task>` for explicit manual refresh.
+- project skill `/goal <goal>` for explicit Goal Capsules.
 
-Other clients are MCP-first until their hook semantics are stable and documented. For those clients, setup writes MCP config and an `AGENTS.md` marker that instructs the agent to route broad structural context through Edgebase automatically. Edgebase also exposes an MCP prompt named `edgebase` for clients that surface prompt menus.
+Other clients are MCP-first until their hook semantics are stable and documented. For those clients, setup writes MCP config and an `AGENTS.md` marker that instructs the agent to route broad structural context through Edgebase automatically. Edgebase also exposes MCP prompts named `edgebase` and `goal` for clients that surface prompt menus.
 
 ## Failure Modes
 

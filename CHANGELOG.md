@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Goal Capsules with `edgebase goal`, `edgebase_goal`, and MCP prompt `goal`.
+- Pre-edit Work Contracts for Claude Code Write/Edit/MultiEdit hooks.
+- Patch Passports with `edgebase passport` for changed files, evidence, explicit tests, risk, and review focus.
+- Claude Code project skill `/goal <goal>`.
+
+### Changed
+
+- Claude Code PostToolUse refresh now reports an edit delta with impacted files, checks, and unverified related context.
+- Documentation now positions Goal Capsules as the executable work-contract surface.
+
 ## 0.1.2 - 2026-05-26
 
 ### Added

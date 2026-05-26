@@ -1,18 +1,64 @@
 # Edgebase
 
-Edgebase is a local, git-native context layer for coding agents.
+Edgebase is a local, git-native work-contract layer for coding agents.
 
-It keeps `AGENTS.md` small, indexes the repository into a rebuildable SQLite graph, and exposes one MCP tool that agents can use before editing:
+Its flagship feature is **Goal Capsules**: short, executable briefs that tell Codex, Claude Code, Continue-style agents, and human reviewers what to read, what not to touch yet, what tests matter, and what evidence the final patch must include.
+
+```bash
+python3 -m edgebase goal "Add passwordless login support without breaking existing OAuth"
+```
+
+```text
+# Edgebase Goal Capsule
+
+Goal:
+Add passwordless login support without breaking existing OAuth
+
+Current hypothesis:
+Edgebase ranks `src/auth/login.py` as the strongest lead, with related context in `src/auth/oauth.py`.
+
+Blast radius:
+- src/auth/login.py
+- src/auth/oauth.py
+- tests/auth/test_login.py
+- tests/auth/test_oauth.py
+
+Read first:
+1. src/auth/login.py
+2. src/auth/oauth.py
+3. tests/auth/test_login.py
+
+Do not edit yet:
+- migrations/*
+- provider configs
+Reason: no schema or provider-configuration change is proven necessary by the current graph evidence.
+
+Required checks:
+- pytest tests/auth/test_login.py
+- pytest tests/auth/test_oauth.py
+
+Patch contract:
+The final PR must include changed files, rationale, tests run, regression evidence, and unresolved assumptions.
+```
+
+Goal Capsules are backed by the local graph index, git state, inferred tests, provenance, and working-tree freshness. They are designed to be pasted into an agent as `/goal ...` or called through the CLI/MCP before any write tool runs.
+
+Edgebase also keeps `AGENTS.md` small, indexes the repository into a rebuildable SQLite graph, and exposes MCP tools that agents can use before editing:
 
 ```text
 edgebase_context(task, changed_files?, budget?)
+edgebase_goal(goal, changed_files?, budget?)
 ```
 
-The output is a compact, source-backed context capsule: high-signal files, symbols, imports, conservative call edges, inferred tests, owners, churn, freshness, and provenance. Claude Code also gets automatic prompt-time context injection through hooks, so users do not need to remember a special phrase before each task.
+The companion context output remains a compact, source-backed capsule: high-signal files, symbols, imports, conservative call edges, inferred tests, owners, churn, freshness, and provenance. Claude Code also gets automatic prompt-time context injection through hooks, so users do not need to remember a special phrase before each task.
 
 Edgebase is not a vector database, a Neo4j wrapper, or a generic memory product. It is a small local substrate for answering:
 
 > Given this task and current diff, what context should the agent read before touching code?
+
+With Goal Capsules, Edgebase also answers:
+
+> What is the executable contract for this goal, and what evidence must the patch return?
 
 ## Why This Exists
 
@@ -71,7 +117,7 @@ Do not add generated architecture summaries to AGENTS.md. Edgebase keeps AGENTS.
 | Edgebase cache | `.edgebase/index.sqlite3` | none | Rebuildable local graph cache, ignored by git |
 | Git ignore | `.git/info/exclude` | none | Locally ignores `.edgebase/` without changing committed ignore files |
 | Agent instructions | `AGENTS.md` marker block | none | Tells agents to use Edgebase automatically for broad exploration/editing |
-| Claude Code | `.mcp.json`, `.claude/settings.json`, `.claude/skills/edgebase/SKILL.md` | none by default | MCP server, automatic UserPromptSubmit context, SessionStart/PostToolUse freshness hooks, `/edgebase` skill |
+| Claude Code | `.mcp.json`, `.claude/settings.json`, `.claude/skills/edgebase/SKILL.md`, `.claude/skills/goal/SKILL.md` | none by default | MCP server, automatic UserPromptSubmit context, PreToolUse work contracts, SessionStart/PostToolUse freshness hooks, `/edgebase` and `/goal` skills |
 | Codex | `.codex/config.toml` | `~/.codex/config.toml` | MCP server entry |
 | Cursor | `.cursor/mcp.json` | `~/.cursor/mcp.json` | MCP server entry |
 | Gemini CLI | `.gemini/settings.json` | `~/.gemini/settings.json` | MCP server entry |
@@ -87,14 +133,16 @@ Setup uses the Python interpreter that ran setup, with `-m edgebase`, instead of
 
 Most users do not run Edgebase manually after setup.
 
-- Claude Code: Edgebase injects a compact context capsule automatically for likely coding prompts through `UserPromptSubmit`. The project skill `/edgebase <task>` is also installed as an explicit command.
-- Codex, Cursor, Gemini CLI, OpenCode, and Windsurf: Edgebase installs MCP config and a marker-bounded `AGENTS.md` instruction telling agents to use `edgebase_context` automatically before broad code exploration or edits. Whether the tool is called without a reminder depends on each client planner, but no per-task user phrase is required by Edgebase itself.
-- Any client: the MCP prompt named `edgebase` is available for clients that expose MCP prompts or slash-command-style prompt menus.
+- Claude Code: Edgebase injects a compact context capsule automatically for likely coding prompts through `UserPromptSubmit`, emits pre-edit Work Contracts through `PreToolUse`, and refreshes edit deltas through `PostToolUse`. Project skills `/edgebase <task>` and `/goal <goal>` are installed as explicit commands.
+- Codex, Cursor, Gemini CLI, OpenCode, and Windsurf: Edgebase installs MCP config and a marker-bounded `AGENTS.md` instruction telling agents to use `edgebase_context` or `edgebase_goal` automatically before broad code exploration or edits. Whether the tool is called without a reminder depends on each client planner, but no per-task user phrase is required by Edgebase itself.
+- Any client: the MCP prompts named `edgebase` and `goal` are available for clients that expose MCP prompts or slash-command-style prompt menus.
 
 Useful manual commands:
 
 ```bash
 python3 -m edgebase context "change the auth login flow" --budget 1200
+python3 -m edgebase goal "add passwordless login without breaking OAuth" --budget 1200
+python3 -m edgebase passport "add passwordless login without breaking OAuth" --test "python3 -m unittest -v: pass"
 python3 -m edgebase index --changed
 python3 -m edgebase stats
 python3 -m edgebase doctor --scope both
@@ -116,7 +164,7 @@ Dynamic-language call graphs are confidence-scored. Low-confidence call edges ar
 
 | Agent | Status | Notes |
 | --- | --- | --- |
-| Claude Code | Supported | Project `.mcp.json`; automatic UserPromptSubmit context hook; async PostToolUse refresh; `/edgebase` project skill |
+| Claude Code | Supported | Project `.mcp.json`; automatic UserPromptSubmit context hook; PreToolUse work contract; async PostToolUse refresh; `/edgebase` and `/goal` project skills |
 | Codex | Supported | Global `~/.codex/config.toml` MCP entry is the verified CLI path; verify with `codex mcp list` |
 | Cursor | Supported | Project and global `mcp.json`; Cursor says Composer Agent automatically uses relevant MCP tools |
 | Gemini CLI | Supported | Project and global `settings.json` with `mcpServers` |
@@ -131,7 +179,7 @@ See [Agent Client Setup](docs/AGENT_CLIENTS.md) for client-specific details and 
 repo files + git history
         |
         v
-extractors -> .edgebase/index.sqlite3 -> context ranker -> edgebase_context
+extractors -> .edgebase/index.sqlite3 -> context ranker -> edgebase_context / edgebase_goal
 ```
 
 The cache is rebuildable. Git remains the source of truth.
@@ -139,9 +187,10 @@ The cache is rebuildable. Git remains the source of truth.
 Automation layers:
 
 - prompt hook: Claude Code receives small context next to coding prompts before it starts exploring
-- edit hook: Claude Code refreshes touched files after Write/Edit/MultiEdit
+- pre-edit hook: Claude Code receives a Work Contract before Write/Edit/MultiEdit
+- edit hook: Claude Code refreshes touched files and emits edit deltas after Write/Edit/MultiEdit
 - git hook: post-commit refresh keeps the cache aligned with committed changes
-- MCP: every supported agent gets the same `edgebase_context` tool over stdio
+- MCP: every supported agent gets `edgebase_context` and `edgebase_goal` over stdio
 - AGENTS marker: static repo instructions stay tiny and tell agents to route structural context through Edgebase
 
 See [Architecture](docs/ARCHITECTURE.md) and [Validation](docs/VALIDATION.md).

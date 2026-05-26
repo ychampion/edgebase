@@ -9,6 +9,7 @@ from typing import Any
 
 from .context import build_context
 from .git import changed_files, find_repo_root, is_git_repo
+from .goal import build_goal_capsule, render_edit_delta, render_work_contract
 from .indexer import index_repo
 from .store import Store
 
@@ -80,6 +81,21 @@ def install_claude_hooks(root: str | Path) -> Path:
         ]
     }
     append_unique(hooks["UserPromptSubmit"], user_prompt_hook)
+    pre_tool = hooks.setdefault("PreToolUse", [])
+    for matcher in ("Write", "Edit", "MultiEdit"):
+        append_unique(
+            pre_tool,
+            {
+                "matcher": matcher,
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": hook_command(repo_root, "claude-pre-tool-use"),
+                        "timeout": 30,
+                    }
+                ],
+            },
+        )
     post_tool = hooks.setdefault("PostToolUse", [])
     for matcher in ("Write", "Edit", "MultiEdit"):
         append_unique(
@@ -115,7 +131,7 @@ def uninstall_claude_hooks(root: str | Path) -> Path:
         raise RuntimeError(f"Refusing to edit invalid JSON: {settings_path}") from exc
     hooks = settings.get("hooks")
     if isinstance(hooks, dict):
-        for event_name in ("SessionStart", "UserPromptSubmit", "PostToolUse"):
+        for event_name in ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse"):
             entries = hooks.get(event_name)
             if isinstance(entries, list):
                 hooks[event_name] = [entry for entry in entries if not hook_entry_runs_edgebase(entry)]
@@ -191,22 +207,55 @@ def handle_claude_user_prompt_submit(root: str | Path) -> int:
     return 0
 
 
+def handle_claude_pre_tool_use(root: str | Path) -> int:
+    payload = read_json_stdin()
+    repo_root = find_repo_root(root)
+    touched = extract_tool_paths(payload, repo_root)
+    goal = extract_goal(payload) or "pending edit"
+    try:
+        capsule = build_goal_capsule(repo_root, goal, touched, budget=700)
+        msg = (
+            "Edgebase pre-edit Work Contract. Use this contract before writing files.\n\n"
+            f"{render_work_contract(capsule.contract)}"
+        )
+    except Exception as exc:
+        msg = f"Edgebase pre-edit Work Contract was unavailable: {exc}."
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": msg}}))
+    return 0
+
+
 def handle_claude_post_tool_use(root: str | Path) -> int:
     payload = read_json_stdin()
     repo_root = find_repo_root(root)
     touched = extract_tool_paths(payload, repo_root)
     if touched:
         index_repo(repo_root, touched, reset=False)
-        task = payload.get("prompt") or "recent edit"
-        capsule = build_context(repo_root, str(task), touched, budget=700, auto_index=False)
+        task = extract_goal(payload) or "recent edit"
+        delta = render_edit_delta(repo_root, str(task), touched, budget=700)
         msg = (
-            f"Edgebase refreshed {len(touched)} edited file(s). "
-            f"Selected context: {', '.join(capsule.selected_files[:4]) or 'none'}."
+            f"Edgebase refreshed {len(touched)} edited file(s).\n\n"
+            f"{delta}"
         )
     else:
         msg = "Edgebase hook ran but found no edited file path in the tool input."
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": msg}}))
     return 0
+
+
+def extract_goal(payload: dict[str, Any]) -> str:
+    prompt = extract_prompt(payload)
+    if prompt:
+        return prompt
+    for key in ("goal", "task", "description"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    tool_input = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    for key in ("goal", "task", "description"):
+        value = tool_input.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def extract_prompt(payload: dict[str, Any]) -> str:

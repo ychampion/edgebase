@@ -1,9 +1,10 @@
 # Agent Client Setup
 
-Edgebase is a local stdio MCP server. It exposes one tool:
+Edgebase is a local stdio MCP server. It exposes two agent-facing tools:
 
 ```text
 edgebase_context(task, changed_files?, budget?)
+edgebase_goal(goal, changed_files?, budget?)
 ```
 
 The normal installation path is:
@@ -44,8 +45,9 @@ Setup writes or updates only local configuration files:
 - `.git/info/exclude`: local ignore entry for `.edgebase/`; committed `.gitignore` is not modified.
 - `AGENTS.md`: marker-bounded instructions that tell agents to use Edgebase automatically when broad code context is needed.
 - `.mcp.json`: Claude Code project MCP server.
-- `.claude/settings.json`: Claude Code automatic UserPromptSubmit context hook plus SessionStart and async PostToolUse hooks.
+- `.claude/settings.json`: Claude Code automatic UserPromptSubmit context hook plus SessionStart, PreToolUse, and async PostToolUse hooks.
 - `.claude/skills/edgebase/SKILL.md`: Claude Code project skill exposed as `/edgebase <task>`.
+- `.claude/skills/goal/SKILL.md`: Claude Code project skill exposed as `/goal <goal>`.
 - `.codex/config.toml` and/or `~/.codex/config.toml`: Codex MCP server.
 - `.cursor/mcp.json` and/or `~/.cursor/mcp.json`: Cursor MCP server.
 - `.gemini/settings.json` and/or `~/.gemini/settings.json`: Gemini CLI MCP server.
@@ -75,15 +77,17 @@ It also writes `.claude/settings.json` hooks:
 
 - `SessionStart`: adds a short freshness note to Claude's context.
 - `UserPromptSubmit`: injects a compact Edgebase capsule next to likely coding prompts before Claude starts exploring.
-- `PostToolUse`: asynchronously reindexes files after Write/Edit/MultiEdit.
+- `PreToolUse`: injects a pre-edit Work Contract before Write/Edit/MultiEdit.
+- `PostToolUse`: asynchronously reindexes files and reports edit deltas after Write/Edit/MultiEdit.
 
 It also writes a project skill:
 
 ```text
 /edgebase <task>
+/goal <goal>
 ```
 
-Use the skill when you want to force a fresh capsule manually. Normal coding prompts do not need the phrase "Use edgebase_context"; the prompt hook supplies context automatically when the prompt looks like implementation, debugging, review, or investigation work.
+Use `/edgebase` when you want a compact read set. Use `/goal` when you want an executable Goal Capsule with blast radius, protected areas, required checks, and a patch contract. Normal coding prompts do not need the phrase "Use edgebase_context"; the prompt hook supplies context automatically when the prompt looks like implementation, debugging, review, or investigation work.
 
 Useful checks:
 
@@ -130,7 +134,7 @@ Edgebase writes `.cursor/mcp.json` and/or `~/.cursor/mcp.json`:
 }
 ```
 
-Cursor documents that Composer Agent automatically uses relevant MCP tools listed under available tools. Edgebase also writes the `AGENTS.md` marker so the agent has a repo-local instruction to route broad structural context through `edgebase_context`.
+Cursor documents that Composer Agent automatically uses relevant MCP tools listed under available tools. Edgebase also writes the `AGENTS.md` marker so the agent has a repo-local instruction to route broad structural context through `edgebase_context` or `edgebase_goal`.
 
 ## Gemini CLI
 
@@ -179,9 +183,11 @@ When MCP is unavailable:
 
 ```bash
 python3 -m edgebase context "implement password reset" --changed-file src/auth.py --budget 1200
+python3 -m edgebase goal "implement password reset without regressing login" --changed-file src/auth.py --budget 1200
+python3 -m edgebase passport "implement password reset without regressing login" --test "python3 -m unittest -v: pass"
 ```
 
-MCP clients that expose prompts can also use the MCP prompt named `edgebase`, which returns the same source-backed capsule in prompt form. Edgebase still exposes only one primary tool, `edgebase_context`; the prompt is a convenience surface for clients with slash-command-style prompt menus.
+MCP clients that expose prompts can also use the MCP prompts named `edgebase` and `goal`, which return the same source-backed capsule surfaces in prompt form.
 
 Refresh:
 
