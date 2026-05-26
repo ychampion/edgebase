@@ -145,6 +145,7 @@ Automation layers:
 - AGENTS marker: static repo instructions stay tiny and tell agents to route structural context through Edgebase
 
 See [Architecture](docs/ARCHITECTURE.md) and [Validation](docs/VALIDATION.md).
+The release audit for `v0.1.2` is documented in [Release Audit](docs/RELEASE_AUDIT_0.1.2.md).
 
 ## Benchmarks
 

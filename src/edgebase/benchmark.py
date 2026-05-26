@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import shutil
 import subprocess
 import time
 from dataclasses import asdict, dataclass
@@ -75,13 +77,16 @@ def run_edgebase(repo: Path, task: dict[str, object]) -> BenchResult:
 
 
 def run_rg(repo: Path, task: dict[str, object]) -> BenchResult:
+    rg_path = shutil.which("rg")
+    if not rg_path:
+        return BenchResult(str(task["id"]), "rg", 0, 0, 0, 0, "`rg` not found on PATH")
     terms = sorted(tokenize(str(task["task"])))[:6]
     started = time.perf_counter()
     output_parts: list[str] = []
     calls = 0
     for term in terms:
         proc = subprocess.run(
-            ["rg", "-n", "--max-count", "8", term],
+            [rg_path, "-n", "--max-count", "8", term],
             cwd=repo,
             text=True,
             stdout=subprocess.PIPE,
@@ -105,11 +110,16 @@ def run_external(repo: Path, task: dict[str, object], runner: str, env_name: str
         task=str(task["task"]),
         changed_files=",".join(str(p) for p in task.get("changed_files", [])),
     )
+    try:
+        args = shlex.split(command)
+    except ValueError as exc:
+        return BenchResult(str(task["id"]), runner, 0, 0, 0, 0, f"invalid command template: {exc}")
+    if not args:
+        return BenchResult(str(task["id"]), runner, 0, 0, 0, 0, f"{env_name} produced an empty command")
     started = time.perf_counter()
     proc = subprocess.run(
-        command,
+        args,
         cwd=repo,
-        shell=True,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

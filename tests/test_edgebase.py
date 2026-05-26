@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -13,9 +14,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from edgebase import __version__
+from edgebase.benchmark import run_external
 from edgebase.context import build_context
 from edgebase.doctor import run_doctor
-from edgebase.hooks import handle_claude_user_prompt_submit
+from edgebase.hooks import handle_claude_user_prompt_submit, install_claude_hooks, install_git_hook
 from edgebase.indexer import index_repo
 from edgebase.mcp import McpServer
 from edgebase.setup import AGENT_DOC_START, disable_repo, setup_repo
@@ -245,6 +247,64 @@ class EdgebaseTests(unittest.TestCase):
             self.assertEqual(output["hookEventName"], "UserPromptSubmit")
             self.assertIn("# Edgebase Context", output["additionalContext"])
             self.assertIn("app/auth.py", output["additionalContext"])
+
+    def test_hook_commands_shell_quote_repo_paths(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="edgebase quote ' ") as tmp:
+            repo = Path(tmp) / "repo with spaces 'and quotes"
+            repo.mkdir()
+            run(repo, "git", "init")
+
+            settings_path = install_claude_hooks(repo)
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            command = settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+            self.assertEqual(
+                shlex.split(command),
+                [
+                    sys.executable,
+                    "-m",
+                    "edgebase",
+                    "hooks",
+                    "claude-user-prompt-submit",
+                    "--root",
+                    str(repo.resolve()),
+                ],
+            )
+
+            hook_path = install_git_hook(repo)
+            hook_lines = hook_path.read_text(encoding="utf-8").splitlines()
+            git_command = hook_lines[hook_lines.index("# edgebase post-commit hook") + 1]
+            self.assertEqual(
+                shlex.split(git_command),
+                [
+                    sys.executable,
+                    "-m",
+                    "edgebase",
+                    "hooks",
+                    "git-post-commit",
+                    "--root",
+                    str(repo.resolve()),
+                ],
+            )
+
+    def test_benchmark_external_runner_uses_argument_vector(self) -> None:
+        with sample_repo() as repo:
+            env_name = "EDGEBASE_TEST_BENCH_CMD"
+            old = os.environ.get(env_name)
+            os.environ[env_name] = f"{shlex.quote(sys.executable)} -c \"print('bench output')\""
+            try:
+                result = run_external(
+                    repo,
+                    {"id": "task-1", "task": "change login", "changed_files": []},
+                    "external",
+                    env_name,
+                )
+            finally:
+                if old is None:
+                    os.environ.pop(env_name, None)
+                else:
+                    os.environ[env_name] = old
+            self.assertEqual(result.skipped_reason, "")
+            self.assertGreater(result.token_estimate, 0)
 
     def test_index_includes_untracked_non_ignored_sources(self) -> None:
         with sample_repo() as repo:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,7 @@ def install_git_hook(root: str | Path) -> Path:
         raise RuntimeError(f"Not a git repository: {repo_root}")
     hook_path = repo_root / ".git" / "hooks" / "post-commit"
     marker = "# edgebase post-commit hook"
-    command = f'\n{marker}\n"{sys.executable}" -m edgebase hooks git-post-commit --root "{repo_root}"\n'
+    command = f"\n{marker}\n{hook_command(repo_root, 'git-post-commit')}\n"
     existing = hook_path.read_text(encoding="utf-8") if hook_path.exists() else "#!/bin/sh\n"
     if marker not in existing:
         hook_path.write_text(existing.rstrip() + command, encoding="utf-8")
@@ -62,7 +63,7 @@ def install_claude_hooks(root: str | Path) -> Path:
         "hooks": [
             {
                 "type": "command",
-                "command": f'"{sys.executable}" -m edgebase hooks claude-session-start --root "{repo_root}"',
+                "command": hook_command(repo_root, "claude-session-start"),
                 "timeout": 30,
             }
         ]
@@ -73,7 +74,7 @@ def install_claude_hooks(root: str | Path) -> Path:
         "hooks": [
             {
                 "type": "command",
-                "command": f'"{sys.executable}" -m edgebase hooks claude-user-prompt-submit --root "{repo_root}"',
+                "command": hook_command(repo_root, "claude-user-prompt-submit"),
                 "timeout": 30,
             }
         ]
@@ -88,7 +89,7 @@ def install_claude_hooks(root: str | Path) -> Path:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": f'"{sys.executable}" -m edgebase hooks claude-post-tool-use --root "{repo_root}"',
+                        "command": hook_command(repo_root, "claude-post-tool-use"),
                         "async": True,
                         "timeout": 60,
                     }
@@ -97,6 +98,10 @@ def install_claude_hooks(root: str | Path) -> Path:
         )
     settings_path.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return settings_path
+
+
+def hook_command(repo_root: Path, hook_name: str) -> str:
+    return shlex.join([sys.executable, "-m", "edgebase", "hooks", hook_name, "--root", str(repo_root)])
 
 
 def uninstall_claude_hooks(root: str | Path) -> Path:

@@ -13,6 +13,7 @@
 - Setup and docs no longer tell users to paste "Use edgebase_context" before each task.
 - Agent instructions now tell agents to use Edgebase automatically when broad structural context is needed.
 - Setup now adds `.edgebase/` to the local git exclude file instead of dirtying fresh repos with cache files.
+- Generated git and Claude hook commands now use shell-safe quoting for repository paths.
 - MCP server version now follows the package version.
 
 ## 0.1.1 - 2026-05-26
