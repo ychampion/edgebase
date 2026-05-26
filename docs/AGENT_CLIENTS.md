@@ -23,7 +23,7 @@ Set up Edgebase for this repository.
 
 Repository target: current working directory.
 
-Do the setup yourself. Do not ask me to run `edgebase setup` manually.
+Do the setup yourself. Do not ask me to run `python3 -m edgebase setup` manually.
 
 Steps:
 1. Confirm you are inside a git repository. If I gave you a repository URL instead of a local repo, clone it first and cd into it.
@@ -39,7 +39,7 @@ Rules:
 - Do not add generated architecture summaries to AGENTS.md.
 - Do not remove existing agent config.
 - Do not commit unless I explicitly ask.
-- Explain that Edgebase is on by default after setup, can be disabled with `edgebase disable --scope both`, and can be bypassed for one emergency session with `EDGEBASE_PREFLIGHT=off`.
+- Explain that Edgebase is on by default after setup, can be disabled with `python3 -m edgebase disable --scope both`, and can be bypassed for one emergency session with `EDGEBASE_PREFLIGHT=off`.
 ```
 
 For a remote repository, replace the target line with `Repository target: https://github.com/OWNER/REPO`.
@@ -49,6 +49,9 @@ Default state after setup: **on** for selected agents. In Claude Code, Codex, an
 ```text
 /edgebase "implement password reset"
 /edgebase-goal "implement password reset without regressing login"
+/edgebase-preflight-status
+/edgebase-checkpoint "handoff after password reset"
+/edgebase-doctor --scope both
 ```
 
 The shell fallback commands are:
@@ -62,7 +65,7 @@ python3 -m edgebase doctor --scope both
 Turn it off with:
 
 ```bash
-edgebase disable --scope both
+python3 -m edgebase disable --scope both
 ```
 
 See [Universal Agent Install Prompt](UNIVERSAL_AGENT_PROMPT.md) for a standalone copy/paste prompt.
@@ -79,11 +82,13 @@ Setup writes or updates only local configuration files:
 - `.claude/settings.json`: Claude Code SessionStart, UserPromptSubmit, PreToolUse, async PostToolUse, PreCompact, and SessionEnd hooks.
 - `.claude/skills/edgebase/SKILL.md`: Claude Code project skill exposed as `/edgebase <task>`.
 - `.claude/skills/edgebase-goal/SKILL.md`: Claude Code project skill exposed as `/edgebase-goal <goal>`.
+- `.claude/skills/edgebase-*/SKILL.md`: Claude Code project skills exposed as `/edgebase-*` operational commands such as `/edgebase-checkpoint`, `/edgebase-preflight-status`, `/edgebase-index`, and `/edgebase-doctor`.
 - `.claude/skills/goal/SKILL.md`: Claude Code compatibility skill exposed as `/goal <goal>`.
 - `.codex/config.toml` and/or `~/.codex/config.toml`: Codex MCP server plus project `[features] hooks = true`.
 - `.codex/hooks.json`: Codex project hook commands for the preflight gate.
 - `.agents/skills/edgebase/SKILL.md`: Codex project skill exposed as `/edgebase <task>` where project skills are enabled.
 - `.agents/skills/edgebase-goal/SKILL.md`: Codex project skill exposed as `/edgebase-goal <goal>` where project skills are enabled.
+- `.agents/skills/edgebase-*/SKILL.md`: Codex project skills exposed as `/edgebase-*` operational commands where project skills are enabled.
 - `.agents/skills/goal/SKILL.md`: Codex compatibility skill exposed as `/goal <goal>`.
 - `.cursor/mcp.json` and/or `~/.cursor/mcp.json`: Cursor MCP server.
 - `.gemini/settings.json` and/or `~/.gemini/settings.json`: Gemini CLI MCP server.
@@ -91,7 +96,7 @@ Setup writes or updates only local configuration files:
 - `~/.codeium/windsurf/mcp_config.json`: Windsurf Cascade MCP server.
 - `.git/hooks/post-commit`: refreshes the Edgebase index after commits.
 
-All generated config points at the Python interpreter that ran setup, with `-m edgebase`, so GUI-launched agents do not depend on shell PATH.
+All generated config points at the Python interpreter that ran setup, so GUI-launched agents do not depend on shell PATH.
 
 ## Claude Code
 
@@ -124,9 +129,21 @@ It also writes project skills:
 /edgebase <task>
 /edgebase-goal <goal>
 /goal <goal>
+/edgebase-checkpoint <message>
+/edgebase-resume [snapshot id]
+/edgebase-fork-plan <objective>
+/edgebase-passport <goal> --test "command: result"
+/edgebase-preflight-status
+/edgebase-preflight-refresh <goal>
+/edgebase-index --changed
+/edgebase-stats
+/edgebase-doctor --scope project
+/edgebase-setup --scope both
+/edgebase-disable --scope both
+/edgebase-version
 ```
 
-Use `/edgebase` when you want a compact read set. Use `/edgebase-goal` when you want an executable Goal Capsule with blast radius, protected areas, required checks, and a patch contract. `/goal` is kept as a shorter compatibility alias. Normal coding prompts do not need the phrase "Use edgebase_context"; the prompt hook records and supplies the Goal Capsule automatically when the prompt looks like implementation, debugging, review, or investigation work.
+Use `/edgebase` when you want a compact read set. Use `/edgebase-goal` when you want an executable Goal Capsule with blast radius, protected areas, required checks, and a patch contract. Use the `/edgebase-*` commands for ordinary checkpoint, resume, preflight, index, doctor, setup, disable, and version tasks from inside the agent. `/goal` is kept as a shorter compatibility alias. Normal coding prompts do not need the phrase "Use edgebase_context"; the prompt hook records and supplies the Goal Capsule automatically when the prompt looks like implementation, debugging, review, or investigation work.
 
 Hook and MCP responses may include `.edgebase/graphs/latest.*` paths. Treat them as local visual aids for relationship inspection; do not paste raw graph JSON or DOT back into agent context.
 
@@ -158,15 +175,17 @@ Project setup also writes `.codex/hooks.json`:
 ```json
 {
   "hooks": [
-    {"event": "SessionStart", "command": "/usr/bin/python3 -m edgebase hooks codex-session-start --root /path/to/repo"},
-    {"event": "UserPromptSubmit", "command": "/usr/bin/python3 -m edgebase hooks codex-user-prompt-submit --root /path/to/repo"},
-    {"event": "PreToolUse", "command": "/usr/bin/python3 -m edgebase hooks codex-pre-tool-use --root /path/to/repo"},
-    {"event": "PostToolUse", "command": "/usr/bin/python3 -m edgebase hooks codex-post-tool-use --root /path/to/repo"},
-    {"event": "PreCompact", "command": "/usr/bin/python3 -m edgebase hooks codex-pre-compact --root /path/to/repo"},
-    {"event": "Stop", "command": "/usr/bin/python3 -m edgebase hooks codex-stop --root /path/to/repo"}
+    {"event": "SessionStart", "command": "<generated Edgebase session-start hook command>"},
+    {"event": "UserPromptSubmit", "command": "<generated Edgebase prompt hook command>"},
+    {"event": "PreToolUse", "command": "<generated Edgebase pre-tool hook command>"},
+    {"event": "PostToolUse", "command": "<generated Edgebase post-tool hook command>"},
+    {"event": "PreCompact", "command": "<generated Edgebase pre-compact hook command>"},
+    {"event": "Stop", "command": "<generated Edgebase stop hook command>"}
   ]
 }
 ```
+
+Those hook entries intentionally use the Python interpreter that ran setup; they are generated runtime config so GUI-launched agents do not depend on shell `PATH`. User-facing commands after setup are the `/edgebase-*` skills or the `python3 -m edgebase ...` module fallback.
 
 And project skills:
 
@@ -174,6 +193,18 @@ And project skills:
 /edgebase <task>
 /edgebase-goal <goal>
 /goal <goal>
+/edgebase-checkpoint <message>
+/edgebase-resume [snapshot id]
+/edgebase-fork-plan <objective>
+/edgebase-passport <goal> --test "command: result"
+/edgebase-preflight-status
+/edgebase-preflight-refresh <goal>
+/edgebase-index --changed
+/edgebase-stats
+/edgebase-doctor --scope project
+/edgebase-setup --scope both
+/edgebase-disable --scope both
+/edgebase-version
 ```
 
 Useful check:
@@ -181,7 +212,7 @@ Useful check:
 ```bash
 codex mcp list
 codex mcp get edgebase
-edgebase doctor --agents codex --scope project
+python3 -m edgebase doctor --agents codex --scope project
 ```
 
 The currently verified Codex CLI path reads `~/.codex/config.toml`, so the frictionless install command uses `--scope both`. Edgebase also writes `.codex/config.toml`, `.codex/hooks.json`, and `.agents/skills/*` for project-local workflows. When Codex trusts project hooks, the hook path gives the same preflight behavior as Claude Code: Goal Capsule before planning, edit block if stale, refresh after edit, checkpoint before compaction, and Patch Passport on stop.
@@ -233,7 +264,7 @@ Edgebase writes:
 }
 ```
 
-OpenCode supports disabling MCP servers with `enabled: false`; `edgebase disable` uses that path.
+OpenCode supports disabling MCP servers with `enabled: false`; `python3 -m edgebase disable` uses that path.
 
 ## Windsurf
 
@@ -247,38 +278,52 @@ Project scope is skipped for Windsurf because Windsurf's documented config path 
 
 ## Manual Use
 
-When MCP is unavailable:
+Inside Claude Code, Codex, or any client that exposes project skills or MCP prompts:
 
-```bash
-edgebase context "implement password reset" --changed-file src/auth.py --budget 1200
-edgebase goal "implement password reset without regressing login" --changed-file src/auth.py --budget 1200
-edgebase passport "implement password reset without regressing login" --test "python3 -m unittest -v: pass"
-edgebase preflight status
-edgebase preflight refresh "implement password reset without regressing login"
-edgebase checkpoint "handoff after password reset"
-edgebase resume
+```text
+/edgebase "implement password reset"
+/edgebase-goal "implement password reset without regressing login"
+/edgebase-passport "implement password reset without regressing login" --test "python3 -m unittest -v: pass"
+/edgebase-preflight-status
+/edgebase-preflight-refresh "implement password reset without regressing login"
+/edgebase-checkpoint "handoff after password reset"
+/edgebase-resume
+/edgebase-index --changed
+/edgebase-disable --scope both
 ```
 
-MCP clients that expose prompts can also use the MCP prompts named `edgebase`, `edgebase-goal`, and `goal`, which return the same source-backed capsule surfaces in prompt form.
+When slash commands and MCP are unavailable, use the console script fallback:
+
+```bash
+python3 -m edgebase context "implement password reset" --changed-file src/auth.py --budget 1200
+python3 -m edgebase goal "implement password reset without regressing login" --changed-file src/auth.py --budget 1200
+python3 -m edgebase passport "implement password reset without regressing login" --test "python3 -m unittest -v: pass"
+python3 -m edgebase preflight status
+python3 -m edgebase preflight refresh "implement password reset without regressing login"
+python3 -m edgebase checkpoint "handoff after password reset"
+python3 -m edgebase resume
+```
+
+MCP clients that expose prompts can also use the MCP prompts named `edgebase`, `edgebase-goal`, `goal`, and the `edgebase-*` aliases, which return the same source-backed capsule and command surfaces in prompt form.
 
 MCP and hook paths refresh `.edgebase/graphs/latest.html`, `.json`, and `.dot` automatically. Open or inspect those local artifacts only when a visual file relationship view helps the task.
 
 Refresh:
 
 ```bash
-edgebase index --changed
+python3 -m edgebase index --changed
 ```
 
 Disable:
 
 ```bash
-edgebase disable --scope both
+python3 -m edgebase disable --scope both
 ```
 
 Re-enable:
 
 ```bash
-edgebase setup --scope both
+python3 -m edgebase setup --scope both
 ```
 
 ## Compatibility References

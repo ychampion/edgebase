@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import sys
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ from .context_branches import create_checkpoint, create_fork_plan, render_resume
 from .graph import graph_artifact_summary, write_graph_artifacts
 from .indexer import index_repo
 from .preflight import prepare_goal_capsule
+from .setup import EDGEBASE_SLASH_COMMANDS
 from .store import Store
 
 
@@ -119,6 +121,24 @@ def resume_tool_definition() -> dict[str, Any]:
     }
 
 
+def slash_prompt_definition(spec: Any) -> dict[str, Any]:
+    return {
+        "name": spec.name,
+        "title": spec.name.replace("-", " ").title(),
+        "description": spec.description,
+        "arguments": [{"name": "arguments", "required": False}],
+    }
+
+
+def slash_prompt_cli(spec: Any, raw_arguments: str) -> str:
+    cli = shlex.join([sys.executable, "-m", "edgebase", *spec.cli_args])
+    if "$ARGUMENTS" not in spec.argument_expr:
+        return cli + spec.argument_expr
+    if '"$ARGUMENTS"' in spec.argument_expr:
+        return cli + spec.argument_expr.replace('"$ARGUMENTS"', shlex.quote(raw_arguments))
+    return cli + spec.argument_expr.replace("$ARGUMENTS", raw_arguments)
+
+
 class McpServer:
     def __init__(self, root: str | Path):
         self.root = Path(root).resolve()
@@ -150,6 +170,7 @@ class McpServer:
                             {"name": "edgebase", "title": "Edgebase Context", "description": "Fetch source-backed codebase context before editing.", "arguments": [{"name": "task", "required": True}, {"name": "budget", "required": False}]},
                             {"name": "edgebase-goal", "title": "Edgebase Goal Capsule", "description": "Fetch an executable Goal Capsule and Work Contract before editing.", "arguments": [{"name": "goal", "required": True}, {"name": "budget", "required": False}]},
                             {"name": "goal", "title": "Edgebase Goal Capsule", "description": "Fetch an executable Goal Capsule and Work Contract before editing.", "arguments": [{"name": "goal", "required": True}, {"name": "budget", "required": False}]},
+                            *[slash_prompt_definition(spec) for spec in EDGEBASE_SLASH_COMMANDS],
                         ]
                     },
                 )
@@ -175,6 +196,23 @@ class McpServer:
                     capsule = prepare_goal_capsule(self.root, goal, [], budget, source=f"mcp-prompt-{name}")
                     text = append_optional_section(capsule.markdown, graph_artifact_summary(capsule.graph_artifacts)) + "\n\nUse this Goal Capsule as the executable work contract before editing."
                     description = "Edgebase executable Goal Capsule."
+                elif any(spec.name == name for spec in EDGEBASE_SLASH_COMMANDS):
+                    spec = next(spec for spec in EDGEBASE_SLASH_COMMANDS if spec.name == name)
+                    raw_arguments = str(
+                        args.get("arguments")
+                        or args.get("message")
+                        or args.get("goal")
+                        or args.get("task")
+                        or args.get("snapshot_id")
+                        or ""
+                    ).strip()
+                    cli = slash_prompt_cli(spec, raw_arguments).strip()
+                    text = (
+                        f"Run the Edgebase slash command `/{spec.name}` for this repository.\n\n"
+                        f"Equivalent shell fallback:\n\n```bash\n{cli}\n```\n\n"
+                        f"{spec.body}"
+                    )
+                    description = spec.description
                 else:
                     return self._error(request_id, -32602, f"Unknown prompt: {name}")
                 return self._result(request_id, {"description": description, "messages": [{"role": "user", "content": {"type": "text", "text": text}}]})

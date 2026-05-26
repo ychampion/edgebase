@@ -16,7 +16,9 @@ from .setup import (
     CODEX_EDGEBASE_GOAL_SKILL_START,
     CODEX_GOAL_SKILL_START,
     CODEX_SKILL_START,
+    EDGEBASE_SLASH_COMMANDS,
     normalize_agents,
+    slash_command_markers,
 )
 from .store import Store
 
@@ -127,6 +129,15 @@ def agent_config_checks(repo_root: Path, agents: set[str], scope: str) -> list[C
                 "Claude Code /edgebase-goal skill",
             )
         )
+        for spec in EDGEBASE_SLASH_COMMANDS:
+            marker_start, _ = slash_command_markers("claude", spec.name)
+            checks.append(
+                text_contains_check(
+                    repo_root / ".claude" / "skills" / spec.name / "SKILL.md",
+                    marker_start,
+                    f"Claude Code /{spec.name} skill",
+                )
+            )
     if "codex" in agents and scope in {"project", "both"}:
         checks.append(text_contains_check(repo_root / ".codex" / "config.toml", "[mcp_servers.edgebase]", "Codex project config"))
         checks.append(text_contains_check(repo_root / ".codex" / "config.toml", "hooks = true", "Codex hooks feature"))
@@ -140,6 +151,15 @@ def agent_config_checks(repo_root: Path, agents: set[str], scope: str) -> list[C
                 "Codex /edgebase-goal skill",
             )
         )
+        for spec in EDGEBASE_SLASH_COMMANDS:
+            marker_start, _ = slash_command_markers("codex", spec.name)
+            checks.append(
+                text_contains_check(
+                    repo_root / ".agents" / "skills" / spec.name / "SKILL.md",
+                    marker_start,
+                    f"Codex /{spec.name} skill",
+                )
+            )
     if "codex" in agents and scope in {"global", "both"}:
         checks.append(
             text_contains_check(Path.home() / ".codex" / "config.toml", "[mcp_servers.edgebase]", "Codex global config")

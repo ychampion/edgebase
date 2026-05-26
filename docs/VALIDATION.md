@@ -81,9 +81,9 @@ Where binaries are available:
 - Gemini CLI: `gemini mcp list`
 - OpenCode: `opencode mcp list`
 
-For Claude Code, also validate that `.claude/settings.json` contains `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, and `SessionEnd`, and that `.claude/skills/edgebase/SKILL.md`, `.claude/skills/edgebase-goal/SKILL.md`, and `.claude/skills/goal/SKILL.md` exist.
+For Claude Code, also validate that `.claude/settings.json` contains `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, and `SessionEnd`, and that `.claude/skills/edgebase/SKILL.md`, `.claude/skills/edgebase-goal/SKILL.md`, `.claude/skills/goal/SKILL.md`, and the generated `.claude/skills/edgebase-*/SKILL.md` command skills exist.
 
-For Codex, validate that `.codex/config.toml` contains `[mcp_servers.edgebase]` and `hooks = true`, `.codex/hooks.json` contains `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, and `Stop`, and `.agents/skills/edgebase/SKILL.md`, `.agents/skills/edgebase-goal/SKILL.md`, and `.agents/skills/goal/SKILL.md` exist.
+For Codex, validate that `.codex/config.toml` contains `[mcp_servers.edgebase]` and `hooks = true`, `.codex/hooks.json` contains `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, and `Stop`, and `.agents/skills/edgebase/SKILL.md`, `.agents/skills/edgebase-goal/SKILL.md`, `.agents/skills/goal/SKILL.md`, and the generated `.agents/skills/edgebase-*/SKILL.md` command skills exist.
 
 For clients not installed in the verification environment, validate the generated config shape and the Edgebase MCP stdio handshake.
 

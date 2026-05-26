@@ -37,6 +37,116 @@ CODEX_EDGEBASE_GOAL_SKILL_END = "<!-- EDGEBASE:CODEX-EDGEBASE-GOAL-SKILL:END -->
 
 
 @dataclass(frozen=True)
+class SlashCommandSpec:
+    name: str
+    cli_args: tuple[str, ...]
+    description: str
+    argument_hint: str
+    argument_expr: str
+    body: str
+
+
+EDGEBASE_SLASH_COMMANDS = (
+    SlashCommandSpec(
+        "edgebase-checkpoint",
+        ("checkpoint",),
+        "Save an Edgebase context checkpoint for compaction or handoff.",
+        '"<handoff message>"',
+        ' "$ARGUMENTS" --budget 1200',
+        "Save a source-backed checkpoint for the current task. Use it before compaction or handoff.",
+    ),
+    SlashCommandSpec(
+        "edgebase-resume",
+        ("resume",),
+        "Render the latest or named Edgebase checkpoint.",
+        "[snapshot id]",
+        " $ARGUMENTS",
+        "Render a saved Edgebase checkpoint so work can resume with compact context.",
+    ),
+    SlashCommandSpec(
+        "edgebase-fork-plan",
+        ("fork-plan",),
+        "Create a git worktree plan from an Edgebase checkpoint.",
+        '"<fork objective>"',
+        ' "$ARGUMENTS" --budget 1200',
+        "Create a branch/worktree plan for parallel agent work from an Edgebase checkpoint.",
+    ),
+    SlashCommandSpec(
+        "edgebase-passport",
+        ("passport",),
+        "Create a Patch Passport for the current working tree.",
+        '"<goal>" --test "command: result"',
+        " $ARGUMENTS --budget 1200",
+        "Summarize the current patch, changed files, explicit test evidence, risk, and review focus.",
+    ),
+    SlashCommandSpec(
+        "edgebase-preflight-status",
+        ("preflight", "status"),
+        "Show whether the Edgebase pre-edit Goal Capsule is fresh.",
+        "",
+        "",
+        "Inspect the current preflight gate state before editing.",
+    ),
+    SlashCommandSpec(
+        "edgebase-preflight-refresh",
+        ("preflight", "refresh"),
+        "Record a fresh Edgebase preflight Goal Capsule.",
+        '"<coding goal>"',
+        ' "$ARGUMENTS" --budget 1200',
+        "Refresh the pre-edit gate with a new Goal Capsule for the current objective.",
+    ),
+    SlashCommandSpec(
+        "edgebase-index",
+        ("index",),
+        "Build or refresh the local Edgebase graph index.",
+        "[--changed | --file path]",
+        " $ARGUMENTS",
+        "Refresh the local graph index. Use `--changed` for a focused git-status refresh.",
+    ),
+    SlashCommandSpec(
+        "edgebase-stats",
+        ("stats",),
+        "Show local Edgebase index statistics.",
+        "",
+        "",
+        "Show file, symbol, edge, and metric counts for the local Edgebase index.",
+    ),
+    SlashCommandSpec(
+        "edgebase-doctor",
+        ("doctor",),
+        "Check the Edgebase index, MCP stdio, and configured agent clients.",
+        "[--agents claude,codex --scope project]",
+        " $ARGUMENTS",
+        "Run Edgebase diagnostics for the current repository and configured agent clients.",
+    ),
+    SlashCommandSpec(
+        "edgebase-setup",
+        ("setup",),
+        "Configure or repair Edgebase integrations for this repository.",
+        "[--agents all --scope both]",
+        " $ARGUMENTS",
+        "Run local Edgebase setup again to install or repair supported agent integrations.",
+    ),
+    SlashCommandSpec(
+        "edgebase-disable",
+        ("disable",),
+        "Turn off Edgebase integrations for this repository.",
+        "[--agents all --scope both]",
+        " $ARGUMENTS",
+        "Remove or disable generated Edgebase integrations for the selected agents and scope.",
+    ),
+    SlashCommandSpec(
+        "edgebase-version",
+        ("--version",),
+        "Show the installed Edgebase version.",
+        "",
+        "",
+        "Print the installed Edgebase version for setup and smoke-test verification.",
+    ),
+)
+
+
+@dataclass(frozen=True)
 class SetupResult:
     path: Path
     action: str
@@ -192,6 +302,11 @@ def agent_docs_block() -> str:
         "```text\n"
         "/edgebase \"<task>\"\n"
         "/edgebase-goal \"<goal>\"\n"
+        "/edgebase-checkpoint \"<handoff message>\"\n"
+        "/edgebase-resume\n"
+        "/edgebase-preflight-status\n"
+        "/edgebase-index --changed\n"
+        "/edgebase-doctor --scope project\n"
         "```\n\n"
         "Fallback when MCP tools, slash commands, and automatic hooks are unavailable:\n\n"
         "```bash\n"
@@ -265,6 +380,15 @@ def setup_claude(
             )
         else:
             results.append(SetupResult(edgebase_goal_skill_path, "updated", "Claude Code project skill /edgebase-goal"))
+        for spec in EDGEBASE_SLASH_COMMANDS:
+            try:
+                command_skill_path = install_claude_command_skill(repo_root, command, spec)
+            except RuntimeError as exc:
+                results.append(
+                    SetupResult(repo_root / ".claude" / "skills" / spec.name / "SKILL.md", "skipped", str(exc))
+                )
+            else:
+                results.append(SetupResult(command_skill_path, "updated", f"Claude Code project skill /{spec.name}"))
         if install_hooks:
             hooks_path = install_claude_hooks(repo_root)
             results.append(SetupResult(hooks_path, "updated", "Claude Code automatic prompt and freshness hooks"))
@@ -389,6 +513,36 @@ def claude_goal_skill_content(
     )
 
 
+def install_claude_command_skill(repo_root: Path, command: str | None, spec: SlashCommandSpec) -> Path:
+    marker_start, marker_end = slash_command_markers("claude", spec.name)
+    skill_path = repo_root / ".claude" / "skills" / spec.name / "SKILL.md"
+    skill_path.parent.mkdir(parents=True, exist_ok=True)
+    if skill_path.exists() and marker_start not in skill_path.read_text(encoding="utf-8"):
+        raise RuntimeError(f"Refusing to overwrite existing Claude skill without Edgebase marker: {skill_path}")
+    skill_path.write_text(claude_command_skill_content(repo_root, command, spec), encoding="utf-8")
+    return skill_path
+
+
+def claude_command_skill_content(repo_root: Path, command: str | None, spec: SlashCommandSpec) -> str:
+    marker_start, marker_end = slash_command_markers("claude", spec.name)
+    return (
+        f"{marker_start}\n"
+        "---\n"
+        f"name: {spec.name}\n"
+        f"description: {spec.description}\n"
+        f"argument-hint: {json.dumps(spec.argument_hint)}\n"
+        "---\n\n"
+        f"# {spec.name}\n\n"
+        f"{spec.body}\n\n"
+        "```bash\n"
+        f"{slash_command_line(repo_root, command, spec)}\n"
+        "```\n\n"
+        "If the MCP tool or prompt equivalent is available, prefer it for structured results. "
+        "Otherwise run the command above from the repository root.\n"
+        f"{marker_end}\n"
+    )
+
+
 def setup_codex(repo_root: Path, scope: str, install_hooks: bool, command: str | None) -> list[SetupResult]:
     results: list[SetupResult] = []
     if scope in {"project", "both"}:
@@ -421,6 +575,15 @@ def setup_codex(repo_root: Path, scope: str, install_hooks: bool, command: str |
             results.append(
                 SetupResult(edgebase_goal_skill, "updated", "Codex project skill /edgebase-goal")
             )
+        for spec in EDGEBASE_SLASH_COMMANDS:
+            try:
+                command_skill = install_codex_command_skill(repo_root, command, spec)
+            except RuntimeError as exc:
+                results.append(
+                    SetupResult(repo_root / ".agents" / "skills" / spec.name / "SKILL.md", "skipped", str(exc))
+                )
+            else:
+                results.append(SetupResult(command_skill, "updated", f"Codex project skill /{spec.name}"))
         if install_hooks:
             hooks_path = install_codex_hooks(repo_root)
             results.append(SetupResult(hooks_path, "updated", "Codex preflight hooks"))
@@ -510,6 +673,52 @@ def codex_goal_skill_content(
         "```\n\nThe recorded Goal Capsule satisfies the pre-edit gate when hooks are trusted.\n"
         f"{marker_end}\n"
     )
+
+
+def install_codex_command_skill(repo_root: Path, command: str | None, spec: SlashCommandSpec) -> Path:
+    marker_start, marker_end = slash_command_markers("codex", spec.name)
+    skill_path = repo_root / ".agents" / "skills" / spec.name / "SKILL.md"
+    skill_path.parent.mkdir(parents=True, exist_ok=True)
+    if skill_path.exists() and marker_start not in skill_path.read_text(encoding="utf-8"):
+        raise RuntimeError(f"Refusing to overwrite existing Codex skill without Edgebase marker: {skill_path}")
+    skill_path.write_text(codex_command_skill_content(repo_root, command, spec), encoding="utf-8")
+    return skill_path
+
+
+def codex_command_skill_content(repo_root: Path, command: str | None, spec: SlashCommandSpec) -> str:
+    marker_start, marker_end = slash_command_markers("codex", spec.name)
+    return (
+        f"{marker_start}\n"
+        "---\n"
+        f"name: {spec.name}\n"
+        f"description: {spec.description}\n"
+        f"argument-hint: {json.dumps(spec.argument_hint)}\n"
+        "---\n\n"
+        f"# {spec.name}\n\n"
+        f"{spec.body}\n\n"
+        "```bash\n"
+        f"{slash_command_line(repo_root, command, spec)}\n"
+        "```\n"
+        f"{marker_end}\n"
+    )
+
+
+def slash_command_markers(host: str, skill_name: str) -> tuple[str, str]:
+    marker = skill_name.upper().replace("-", "_")
+    return (
+        f"<!-- EDGEBASE:{host.upper()}-COMMAND-{marker}-SKILL:START -->",
+        f"<!-- EDGEBASE:{host.upper()}-COMMAND-{marker}-SKILL:END -->",
+    )
+
+
+def slash_command_line(repo_root: Path, command: str | None, spec: SlashCommandSpec) -> str:
+    executable, prefix = command_parts(command)
+    if spec.cli_args and spec.cli_args[0].startswith("--"):
+        parts = [executable, *prefix, *spec.cli_args]
+    else:
+        parts = [executable, *prefix, *spec.cli_args, "--root", str(repo_root)]
+    command_prefix = shlex.join(parts)
+    return command_prefix + spec.argument_expr
 
 
 def setup_cursor(repo_root: Path, scope: str, command: str | None) -> list[SetupResult]:
@@ -693,6 +902,9 @@ def disable_claude(repo_root: Path, scope: str, remove_hooks: bool) -> list[Setu
         results.append(
             SetupResult(edgebase_goal_skill_path, "updated", "removed Claude Code project skill /edgebase-goal")
         )
+        for spec in EDGEBASE_SLASH_COMMANDS:
+            command_skill_path = uninstall_claude_command_skill(repo_root, spec)
+            results.append(SetupResult(command_skill_path, "updated", f"removed Claude Code project skill /{spec.name}"))
         if remove_hooks:
             hooks_path = uninstall_claude_hooks(repo_root)
             results.append(SetupResult(hooks_path, "updated", "removed Claude Code freshness hooks"))
@@ -747,6 +959,11 @@ def uninstall_claude_goal_skill_named(repo_root: Path, skill_name: str, marker_s
     return skill_path
 
 
+def uninstall_claude_command_skill(repo_root: Path, spec: SlashCommandSpec) -> Path:
+    marker_start, _ = slash_command_markers("claude", spec.name)
+    return uninstall_claude_goal_skill_named(repo_root, spec.name, marker_start)
+
+
 def disable_codex(repo_root: Path, scope: str, remove_hooks: bool) -> list[SetupResult]:
     results: list[SetupResult] = []
     if scope in {"project", "both"}:
@@ -759,6 +976,9 @@ def disable_codex(repo_root: Path, scope: str, remove_hooks: bool) -> list[Setup
         results.append(SetupResult(goal_skill_path, "updated", "removed Codex project skill /goal"))
         edgebase_goal_skill_path = uninstall_codex_edgebase_goal_skill(repo_root)
         results.append(SetupResult(edgebase_goal_skill_path, "updated", "removed Codex project skill /edgebase-goal"))
+        for spec in EDGEBASE_SLASH_COMMANDS:
+            command_skill_path = uninstall_codex_command_skill(repo_root, spec)
+            results.append(SetupResult(command_skill_path, "updated", f"removed Codex project skill /{spec.name}"))
         if remove_hooks:
             hooks_path = uninstall_codex_hooks(repo_root)
             results.append(SetupResult(hooks_path, "updated", "removed Codex hooks"))
@@ -801,6 +1021,11 @@ def uninstall_codex_goal_skill_named(repo_root: Path, skill_name: str, marker_st
         except OSError:
             break
     return skill_path
+
+
+def uninstall_codex_command_skill(repo_root: Path, spec: SlashCommandSpec) -> Path:
+    marker_start, _ = slash_command_markers("codex", spec.name)
+    return uninstall_codex_goal_skill_named(repo_root, spec.name, marker_start)
 
 
 def disable_cursor(repo_root: Path, scope: str) -> list[SetupResult]:

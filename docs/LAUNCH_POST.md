@@ -27,6 +27,9 @@ Explicit commands are available when a client exposes project skills or MCP prom
 ```text
 /edgebase "what should I read before this change?"
 /edgebase-goal "ship this feature without breaking the nearby tests"
+/edgebase-checkpoint "handoff before context compaction"
+/edgebase-preflight-status
+/edgebase-index --changed
 ```
 
 The goal is narrow: reduce wasted search/read calls without lowering patch quality.
@@ -50,6 +53,6 @@ It gives coding agents fresh, source-backed context before they edit:
 
 Local-first. Git-native. No Docker, cloud, API key, or graph DB.
 
-Claude Code gets hooks. Codex gets MCP + project hooks/skills. Other agents get MCP. Slash-capable clients get `/edgebase` and `/edgebase-goal`.
+Claude Code gets hooks. Codex gets MCP + project hooks/skills. Other agents get MCP. Slash-capable clients get `/edgebase`, `/edgebase-goal`, and `/edgebase-*` operational commands.
 
 Repo: https://github.com/ychampion/edgebase

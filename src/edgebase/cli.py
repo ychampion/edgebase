@@ -83,7 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
     setup_p.add_argument(
         "--command",
         default=None,
-        help="Executable MCP clients should run. Defaults to the current Python with `-m edgebase`.",
+        help="Executable MCP clients should run. Defaults to the current Python module invocation.",
     )
     setup_p.set_defaults(func=cmd_setup)
 
@@ -256,7 +256,9 @@ def cmd_init(args: argparse.Namespace) -> int:
             agents_path.write_text(
                 "# Agent Instructions\n\n"
                 "Keep static instructions minimal. For codebase structure, use slash commands when available:\n\n"
-                "```text\n/edgebase \"<task>\"\n/edgebase-goal \"<goal>\"\n```\n\n"
+                "```text\n/edgebase \"<task>\"\n/edgebase-goal \"<goal>\"\n"
+                "/edgebase-checkpoint \"<handoff message>\"\n/edgebase-resume\n"
+                "/edgebase-preflight-status\n/edgebase-index --changed\n/edgebase-doctor --scope project\n```\n\n"
                 "Fallback commands:\n\n"
                 "```bash\nedgebase context \"<task>\" --budget 1200\n"
                 "edgebase goal \"<goal>\" --budget 1200 --record-preflight\n"
@@ -300,7 +302,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
     print("")
     print("Edgebase is enabled for the selected agents.")
     print("Restart your agent/IDE. Claude Code and Codex load Edgebase automatically when hooks are trusted.")
-    print("Slash-capable clients get /edgebase and /edgebase-goal. MCP clients also get edgebase_context and edgebase_goal.")
+    print("Slash-capable clients get /edgebase plus the /edgebase-* command set.")
+    print("MCP clients also get edgebase_context, edgebase_goal, and Edgebase prompt aliases.")
     print("Turn it off with: `edgebase disable --scope {}`".format(args.scope))
     return 0
 
@@ -374,7 +377,8 @@ def cmd_checkpoint(args: argparse.Namespace) -> int:
         print(json.dumps(snapshot.to_dict(), indent=2, sort_keys=True))
     else:
         print(f"Checkpoint {snapshot.id} recorded.")
-        print(f"Resume with: edgebase resume {snapshot.id}")
+        print(f"Resume with: /edgebase-resume {snapshot.id}")
+        print(f"Shell fallback: edgebase resume {snapshot.id}")
     return 0
 
 
@@ -399,6 +403,7 @@ def cmd_fork_plan(args: argparse.Namespace) -> int:
         print(f"Worktree: {snapshot.worktree_path}")
         print(f"Branch: {snapshot.worktree_branch}")
         print(f"Resume with: {snapshot.to_dict()['next_command']}")
+        print(f"Shell fallback: edgebase resume {snapshot.parent_id}")
     return 0
 
 

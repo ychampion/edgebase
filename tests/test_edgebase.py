@@ -29,7 +29,7 @@ from edgebase.hooks import (
 )
 from edgebase.indexer import index_repo
 from edgebase.mcp import McpServer
-from edgebase.setup import AGENT_DOC_START, disable_repo, setup_repo
+from edgebase.setup import AGENT_DOC_START, EDGEBASE_SLASH_COMMANDS, disable_repo, setup_repo
 from edgebase.store import Store
 
 
@@ -230,10 +230,10 @@ class EdgebaseTests(unittest.TestCase):
 
             prompts = server.handle({"jsonrpc": "2.0", "id": 3, "method": "prompts/list"})
             self.assertIsNotNone(prompts)
-            self.assertEqual(
-                [prompt["name"] for prompt in prompts["result"]["prompts"]],
-                ["edgebase", "edgebase-goal", "goal"],
-            )
+            prompt_names = [prompt["name"] for prompt in prompts["result"]["prompts"]]
+            self.assertEqual(prompt_names[:3], ["edgebase", "edgebase-goal", "goal"])
+            self.assertIn("edgebase-checkpoint", prompt_names)
+            self.assertIn("edgebase-doctor", prompt_names)
 
             called = server.handle(
                 {
@@ -314,6 +314,19 @@ class EdgebaseTests(unittest.TestCase):
             self.assertIn("# Edgebase Goal Capsule", branded_goal_prompt_text)
             self.assertIn("executable work contract", branded_goal_prompt_text)
 
+            slash_prompt = server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 8,
+                    "method": "prompts/get",
+                    "params": {"name": "edgebase-checkpoint", "arguments": {"arguments": "handoff login work"}},
+                }
+            )
+            self.assertIsNotNone(slash_prompt)
+            slash_prompt_text = slash_prompt["result"]["messages"][0]["content"]["text"]
+            self.assertIn("/edgebase-checkpoint", slash_prompt_text)
+            self.assertIn("-m edgebase checkpoint 'handoff login work' --budget 1200", slash_prompt_text)
+
     def test_mcp_cli_accepts_root_after_subcommand(self) -> None:
         with sample_repo() as repo:
             env = os.environ.copy()
@@ -355,6 +368,7 @@ class EdgebaseTests(unittest.TestCase):
             self.assertIn(AGENT_DOC_START, agents_md)
             self.assertIn("Do not wait for the user", agents_md)
             self.assertIn("/edgebase-goal", agents_md)
+            self.assertIn("/edgebase-checkpoint", agents_md)
 
             claude = json.loads((repo / ".mcp.json").read_text(encoding="utf-8"))
             self.assertIn("-m", claude["mcpServers"]["edgebase"]["args"])
@@ -375,6 +389,14 @@ class EdgebaseTests(unittest.TestCase):
             )
             self.assertIn("name: edgebase-goal", branded_goal_skill)
             self.assertIn("edgebase_goal", branded_goal_skill)
+
+            for spec in EDGEBASE_SLASH_COMMANDS:
+                command_skill = (repo / ".claude" / "skills" / spec.name / "SKILL.md").read_text(
+                    encoding="utf-8"
+                )
+                self.assertIn(f"name: {spec.name}", command_skill)
+                for cli_arg in spec.cli_args:
+                    self.assertIn(cli_arg, command_skill)
 
             cursor = json.loads((repo / ".cursor" / "mcp.json").read_text(encoding="utf-8"))
             self.assertIn("edgebase", cursor["mcpServers"])
@@ -425,6 +447,12 @@ class EdgebaseTests(unittest.TestCase):
             self.assertIn("edgebase_goal", branded_goal_skill)
             self.assertIn("--record-preflight", branded_goal_skill)
 
+            for spec in EDGEBASE_SLASH_COMMANDS:
+                command_skill = (repo / ".agents" / "skills" / spec.name / "SKILL.md").read_text(
+                    encoding="utf-8"
+                )
+                self.assertIn(f"name: {spec.name}", command_skill)
+
             checks = {check.name: check for check in run_doctor(repo, agents=["codex"], scope="project")}
             self.assertEqual(checks["Codex project config"].status, "ok")
             self.assertEqual(checks["Codex hooks feature"].status, "ok")
@@ -432,6 +460,7 @@ class EdgebaseTests(unittest.TestCase):
             self.assertEqual(checks["Codex /edgebase skill"].status, "ok")
             self.assertEqual(checks["Codex /goal skill"].status, "ok")
             self.assertEqual(checks["Codex /edgebase-goal skill"].status, "ok")
+            self.assertEqual(checks["Codex /edgebase-checkpoint skill"].status, "ok")
 
     def test_codex_setup_skips_unmarked_existing_skills(self) -> None:
         with sample_repo() as repo:
@@ -511,7 +540,9 @@ class EdgebaseTests(unittest.TestCase):
             self.assertFalse((repo / ".claude" / "skills" / "edgebase" / "SKILL.md").exists())
             self.assertFalse((repo / ".claude" / "skills" / "goal" / "SKILL.md").exists())
             self.assertFalse((repo / ".claude" / "skills" / "edgebase-goal" / "SKILL.md").exists())
+            self.assertFalse((repo / ".claude" / "skills" / "edgebase-checkpoint" / "SKILL.md").exists())
             self.assertFalse((repo / ".agents" / "skills" / "edgebase-goal" / "SKILL.md").exists())
+            self.assertFalse((repo / ".agents" / "skills" / "edgebase-checkpoint" / "SKILL.md").exists())
 
     def test_claude_prompt_hook_injects_context_for_coding_prompts(self) -> None:
         with sample_repo() as repo:
@@ -530,6 +561,7 @@ class EdgebaseTests(unittest.TestCase):
             self.assertEqual(checks["Claude Code /edgebase skill"].status, "ok")
             self.assertEqual(checks["Claude Code /goal skill"].status, "ok")
             self.assertEqual(checks["Claude Code /edgebase-goal skill"].status, "ok")
+            self.assertEqual(checks["Claude Code /edgebase-checkpoint skill"].status, "ok")
 
             old_stdin = sys.stdin
             stdout = io.StringIO()
@@ -574,6 +606,7 @@ class EdgebaseTests(unittest.TestCase):
             self.assertEqual(output["hookEventName"], "PreToolUse")
             self.assertEqual(output["permissionDecision"], "deny")
             self.assertIn("no fresh Edgebase Goal Capsule", output["permissionDecisionReason"])
+            self.assertIn("/edgebase-preflight-refresh <goal>", output["permissionDecisionReason"])
 
     def test_pre_tool_hook_does_not_block_named_read_tools(self) -> None:
         with sample_repo() as repo:

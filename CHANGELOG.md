@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.1.7 - 2026-05-26
+
+### Added
+
+- Project slash skills for normal Edgebase operations: `/edgebase-checkpoint`, `/edgebase-resume`, `/edgebase-fork-plan`, `/edgebase-passport`, `/edgebase-preflight-status`, `/edgebase-preflight-refresh`, `/edgebase-index`, `/edgebase-stats`, `/edgebase-doctor`, `/edgebase-setup`, `/edgebase-disable`, and `/edgebase-version`.
+- MCP prompt aliases for the `/edgebase-*` operational command set.
+- Graph lifecycle verification notes in `docs/GRAPH_VERIFICATION_0.1.7.md`.
+
+### Changed
+
+- Agent-facing docs now prefer slash commands for day-to-day Edgebase operations, with `python3 -m edgebase ...` kept as the shell fallback.
+
 ## 0.1.6 - 2026-05-26
 
 ### Added
@@ -83,7 +95,7 @@
 
 ### Changed
 
-- MCP configs now default to the Python interpreter that ran setup with `-m edgebase`, avoiding GUI PATH issues.
+- MCP configs now default to the Python interpreter that ran setup, avoiding GUI PATH issues.
 - Claude Code PostToolUse refresh runs asynchronously.
 - CLI `--root` works before or after the subcommand.
 

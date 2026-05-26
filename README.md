@@ -114,7 +114,7 @@ Set up Edgebase for this repository.
 
 Repository target: current working directory.
 
-Do the setup yourself. Do not ask me to run `edgebase setup` manually.
+Do the setup yourself. Do not ask me to run `python3 -m edgebase setup` manually.
 
 Steps:
 1. Confirm you are inside a git repository. If I gave you a repository URL instead of a local repo, clone it first and cd into it.
@@ -130,7 +130,7 @@ Rules:
 - Do not add generated architecture summaries to AGENTS.md.
 - Do not remove existing agent config.
 - Do not commit unless I explicitly ask.
-- Explain that Edgebase is on by default after setup, can be disabled with `edgebase disable --scope both`, and can be bypassed for one emergency session with `EDGEBASE_PREFLIGHT=off`.
+- Explain that Edgebase is on by default after setup, can be disabled with `python3 -m edgebase disable --scope both`, and can be bypassed for one emergency session with `EDGEBASE_PREFLIGHT=off`.
 ```
 
 If you are setting up a remote repository, change the target line:
@@ -151,7 +151,7 @@ python3 -m edgebase setup --scope both
 python3 -m edgebase doctor --scope both
 ```
 
-Edgebase is enabled by default after setup. Turn it off with `edgebase disable --scope both`.
+Edgebase is enabled by default after setup. Turn it off with `python3 -m edgebase disable --scope both`.
 
 To bypass only the edit gate for one emergency session without removing MCP config:
 
@@ -161,15 +161,15 @@ EDGEBASE_PREFLIGHT=off
 
 ## What Setup Changes
 
-`edgebase setup --scope both` makes local, reversible changes:
+`python3 -m edgebase setup --scope both` makes local, reversible changes:
 
 | Target | Project file | User file | Behavior |
 | --- | --- | --- | --- |
 | Edgebase cache/artifacts | `.edgebase/index.sqlite3`, `.edgebase/graphs/latest.*` | none | Rebuildable local graph cache plus optional visual artifacts, ignored by git |
 | Git ignore | `.git/info/exclude` | none | Locally ignores `.edgebase/` without changing committed ignore files |
 | Agent instructions | `AGENTS.md` marker block | none | Tells agents to use Edgebase automatically for broad exploration/editing |
-| Claude Code | `.mcp.json`, `.claude/settings.json`, `.claude/skills/edgebase/SKILL.md`, `.claude/skills/edgebase-goal/SKILL.md`, `.claude/skills/goal/SKILL.md` | none by default | MCP server, automatic Goal Capsules, PreToolUse stale-capsule blocking, SessionStart/PostToolUse/PreCompact/SessionEnd hooks, `/edgebase`, `/edgebase-goal`, and `/goal` skills |
-| Codex | `.codex/config.toml`, `.codex/hooks.json`, `.agents/skills/edgebase/SKILL.md`, `.agents/skills/edgebase-goal/SKILL.md`, `.agents/skills/goal/SKILL.md` | `~/.codex/config.toml` | MCP server entry, project hook config, project skills, AGENTS.md routing |
+| Claude Code | `.mcp.json`, `.claude/settings.json`, `.claude/skills/edgebase*/SKILL.md`, `.claude/skills/goal/SKILL.md` | none by default | MCP server, automatic Goal Capsules, PreToolUse stale-capsule blocking, SessionStart/PostToolUse/PreCompact/SessionEnd hooks, `/edgebase`, `/edgebase-goal`, `/goal`, and `/edgebase-*` command skills |
+| Codex | `.codex/config.toml`, `.codex/hooks.json`, `.agents/skills/edgebase*/SKILL.md`, `.agents/skills/goal/SKILL.md` | `~/.codex/config.toml` | MCP server entry, project hook config, project skills including `/edgebase-*`, AGENTS.md routing |
 | Cursor | `.cursor/mcp.json` | `~/.cursor/mcp.json` | MCP server entry |
 | Gemini CLI | `.gemini/settings.json` | `~/.gemini/settings.json` | MCP server entry |
 | OpenCode | `.opencode.json` | `~/.opencode.json` | Enabled local MCP server |
@@ -178,37 +178,48 @@ EDGEBASE_PREFLIGHT=off
 
 No Docker, cloud service, graph database, or API key is required.
 
-Setup uses the Python interpreter that ran setup, with `-m edgebase`, instead of assuming GUI agents can see `edgebase` on `PATH`.
+Generated hook and MCP config use the Python interpreter that ran setup instead of assuming GUI agents can see `edgebase` on `PATH`.
 
 ## Day-To-Day Usage
 
-Most users do not run Edgebase manually after setup.
+Most users do not run Edgebase manually after setup. When an explicit action is useful, run slash commands inside Claude Code, Codex, or any client that exposes project skills or MCP prompts.
 
-- Claude Code: `UserPromptSubmit` records and injects a Goal Capsule before planning. `PreToolUse` blocks Write/Edit/MultiEdit if no fresh capsule exists. `PostToolUse` refreshes the graph after edits. `PreCompact` saves a checkpoint, and `SessionEnd` saves a Patch Passport. Project skills `/edgebase <task>` and `/edgebase-goal <goal>` are installed as explicit commands; `/goal <goal>` remains as a compatibility alias.
-- Codex: setup writes MCP config, project `.codex/hooks.json`, `[features] hooks = true`, `.agents/skills/edgebase`, `.agents/skills/edgebase-goal`, `.agents/skills/goal`, and the `AGENTS.md` marker. Codex uses MCP plus project skills by default; when trusted hook support is active, the same preflight gate records capsules, blocks stale edits, refreshes after edits, checkpoints before compaction, and saves a Patch Passport on stop.
+- Claude Code: `UserPromptSubmit` records and injects a Goal Capsule before planning. `PreToolUse` blocks Write/Edit/MultiEdit if no fresh capsule exists. `PostToolUse` refreshes the graph after edits. `PreCompact` saves a checkpoint, and `SessionEnd` saves a Patch Passport. Project skills install `/edgebase`, `/edgebase-goal`, `/goal`, and the `/edgebase-*` command set.
+- Codex: setup writes MCP config, project `.codex/hooks.json`, `[features] hooks = true`, `.agents/skills/edgebase*`, `.agents/skills/goal`, and the `AGENTS.md` marker. Codex uses MCP plus project skills by default; when trusted hook support is active, the same preflight gate records capsules, blocks stale edits, refreshes after edits, checkpoints before compaction, and saves a Patch Passport on stop.
 - Cursor, Gemini CLI, OpenCode, and Windsurf: Edgebase installs MCP config and a marker-bounded `AGENTS.md` instruction telling agents to use `edgebase_context` or `edgebase_goal` automatically before broad code exploration or edits. Those MCP calls update `.edgebase/graphs/latest.*` and return the artifact paths.
-- Any client: the MCP prompts named `edgebase`, `edgebase-goal`, and `goal` are available for clients that expose MCP prompts or slash-command-style prompt menus.
+- Any client: the MCP prompts named `edgebase`, `edgebase-goal`, `goal`, and the `/edgebase-*` aliases are available for clients that expose MCP prompts or slash-command-style prompt menus.
 
 Useful explicit slash commands inside supported agent REPLs/apps:
 
 ```text
 /edgebase "change the auth login flow"
 /edgebase-goal "add passwordless login without breaking OAuth"
+/edgebase-passport "add passwordless login without breaking OAuth" --test "python3 -m unittest -v: pass"
+/edgebase-preflight-status
+/edgebase-preflight-refresh "add passwordless login without breaking OAuth"
+/edgebase-checkpoint "handoff after auth refactor"
+/edgebase-resume
+/edgebase-fork-plan "split auth UI and token backend work"
+/edgebase-index --changed
+/edgebase-stats
+/edgebase-doctor --scope both
+/edgebase-disable --scope both
+/edgebase-version
 ```
 
-Shell fallback and verification commands:
+Shell fallback and server/development commands:
 
 ```bash
-edgebase context "change the auth login flow" --budget 1200
-edgebase goal "add passwordless login without breaking OAuth" --budget 1200
-edgebase passport "add passwordless login without breaking OAuth" --test "python3 -m unittest -v: pass"
-edgebase preflight status
-edgebase checkpoint "handoff after auth refactor"
-edgebase resume
-edgebase index --changed
-edgebase stats
-edgebase doctor --scope both
-edgebase disable --scope both
+python3 -m edgebase context "change the auth login flow" --budget 1200
+python3 -m edgebase goal "add passwordless login without breaking OAuth" --budget 1200
+python3 -m edgebase passport "add passwordless login without breaking OAuth" --test "python3 -m unittest -v: pass"
+python3 -m edgebase preflight status
+python3 -m edgebase checkpoint "handoff after auth refactor"
+python3 -m edgebase resume
+python3 -m edgebase index --changed
+python3 -m edgebase stats
+python3 -m edgebase doctor --scope both
+python3 -m edgebase disable --scope both
 ```
 
 ## What It Indexes
@@ -226,8 +237,8 @@ Dynamic-language call graphs are confidence-scored. Low-confidence call edges ar
 
 | Agent | Status | Notes |
 | --- | --- | --- |
-| Claude Code | Supported | Project `.mcp.json`; automatic UserPromptSubmit Goal Capsule; PreToolUse stale-capsule block; async PostToolUse refresh; PreCompact checkpoint; SessionEnd Patch Passport; `/edgebase`, `/edgebase-goal`, and `/goal` project skills |
-| Codex | Supported | Project `.codex/config.toml`, `.codex/hooks.json`, `.agents/skills`; global `~/.codex/config.toml` MCP entry for CLI discovery; verify with `codex mcp list` and `edgebase doctor` |
+| Claude Code | Supported | Project `.mcp.json`; automatic UserPromptSubmit Goal Capsule; PreToolUse stale-capsule block; async PostToolUse refresh; PreCompact checkpoint; SessionEnd Patch Passport; `/edgebase`, `/edgebase-goal`, `/goal`, and `/edgebase-*` project skills |
+| Codex | Supported | Project `.codex/config.toml`, `.codex/hooks.json`, `.agents/skills`; global `~/.codex/config.toml` MCP entry for CLI discovery; verify with `codex mcp list` and `python3 -m edgebase doctor` |
 | Cursor | Supported | Project and global `mcp.json`; Cursor says Composer Agent automatically uses relevant MCP tools |
 | Gemini CLI | Supported | Project and global `settings.json` with `mcpServers` |
 | OpenCode | Supported | Local MCP server under `mcp.edgebase`, `enabled: true` |
@@ -263,8 +274,8 @@ Automation layers:
 
 This is not a separate graph UI or a new agent control surface; visualization is kept as a local artifact attached to the existing agent context flow.
 
-See [Architecture](docs/ARCHITECTURE.md) and [Validation](docs/VALIDATION.md).
-The latest release audit is documented in [Release Audit](docs/RELEASE_AUDIT_0.1.6.md).
+See [Architecture](docs/ARCHITECTURE.md), [Validation](docs/VALIDATION.md), and [Graph Verification](docs/GRAPH_VERIFICATION_0.1.7.md).
+The latest release audit is documented in [Release Audit](docs/RELEASE_AUDIT_0.1.7.md).
 
 ## Benchmarks
 

@@ -81,7 +81,7 @@ def create_fork_plan(
         context_markdown=parent.context_markdown,
         token_estimate=parent.token_estimate,
         stale_files=parent.stale_files,
-        next_command=f"edgebase resume {parent.id}",
+        next_command=f"/edgebase-resume {parent.id}",
         parent_id=parent.id,
         worktree_path=str(worktree_path),
         worktree_branch=branch_name,
@@ -97,7 +97,7 @@ def resume_snapshot(root: str | Path, snapshot_id: str = "") -> ContextSnapshot:
     repo_root = find_repo_root(root)
     target_id = snapshot_id.strip() or read_latest(repo_root)
     if not target_id:
-        raise RuntimeError("No Edgebase checkpoint found. Run `edgebase checkpoint \"<message>\"` first.")
+        raise RuntimeError("No Edgebase checkpoint found. Run `/edgebase-checkpoint \"<message>\"` first, or use `edgebase checkpoint \"<message>\"` from a shell.")
     path = snapshots_dir(repo_root) / f"{target_id}.json"
     if not path.exists():
         raise RuntimeError(f"Edgebase checkpoint not found: {target_id}")
@@ -141,7 +141,7 @@ def build_snapshot(repo_root: Path, kind: str, message: str, budget: int) -> Con
         context_markdown=capsule.markdown,
         token_estimate=capsule.token_estimate,
         stale_files=list(capsule.stale_files),
-        next_command=f"edgebase resume {snapshot_id}",
+        next_command=f"/edgebase-resume {snapshot_id}",
     )
 
 
