@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .context import estimate_tokens, rank_files, select_files, stale_files, tokenize
@@ -35,6 +35,7 @@ class GoalCapsule:
     markdown: str
     contract: WorkContract
     token_estimate: int
+    graph_artifacts: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -56,7 +57,19 @@ def build_goal_capsule(
     repo_root = find_repo_root(root)
     contract = build_work_contract(repo_root, goal, changed_files, budget, auto_index)
     markdown = render_goal_capsule(contract)
-    return GoalCapsule(markdown, contract, estimate_tokens(markdown))
+    graph_artifacts: dict[str, str] = {}
+    try:
+        from .graph import write_graph_artifacts
+
+        graph_artifacts = write_graph_artifacts(
+            repo_root,
+            task=contract.goal,
+            changed_files=changed_files or [],
+            selected_files=contract.blast_radius,
+        )
+    except Exception:
+        graph_artifacts = {}
+    return GoalCapsule(markdown, contract, estimate_tokens(markdown), graph_artifacts)
 
 
 def build_work_contract(

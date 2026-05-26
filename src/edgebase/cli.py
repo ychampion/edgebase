@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .benchmark import run_benchmark
 from .context import build_context
+from .context_branches import create_checkpoint, create_fork_plan, render_resume, resume_snapshot
 from .doctor import run_doctor
 from .git import changed_files, find_repo_root
 from .goal import build_goal_capsule, build_patch_passport
@@ -134,6 +135,31 @@ def build_parser() -> argparse.ArgumentParser:
     passport_p.add_argument("--budget", type=int, default=1200, help="Approximate token budget.")
     passport_p.set_defaults(func=cmd_passport)
 
+    checkpoint_p = sub.add_parser("checkpoint", help="Record a local context checkpoint for later resume.")
+    add_subcommand_root(checkpoint_p)
+    checkpoint_p.add_argument("message", help="What the agent has understood or reached.")
+    checkpoint_p.add_argument("--budget", type=int, default=1200, help="Approximate token budget for stored context.")
+    checkpoint_p.add_argument("--json", action="store_true", help="Emit machine-readable snapshot metadata.")
+    checkpoint_p.set_defaults(func=cmd_checkpoint)
+
+    fork_p = sub.add_parser("fork-plan", help="Create a git worktree branch for trying a plan.")
+    add_subcommand_root(fork_p)
+    fork_p.add_argument("message", help="Plan or hypothesis to try in the fork.")
+    fork_p.add_argument("--from", dest="from_id", default="", help="Parent checkpoint or fork-plan id.")
+    fork_p.add_argument("--branch", default="", help="Git branch name for the new worktree.")
+    fork_p.add_argument("--path", default="", help="Filesystem path for the new worktree.")
+    fork_p.add_argument("--allow-dirty", action="store_true", help="Allow forking from a dirty working tree.")
+    fork_p.add_argument("--budget", type=int, default=1200, help="Approximate token budget for stored context.")
+    fork_p.add_argument("--json", action="store_true", help="Emit machine-readable snapshot metadata.")
+    fork_p.set_defaults(func=cmd_fork_plan)
+
+    resume_p = sub.add_parser("resume", help="Render the latest or selected context snapshot.")
+    add_subcommand_root(resume_p)
+    resume_p.add_argument("snapshot_id", nargs="?", default="", help="Checkpoint or fork-plan id.")
+    resume_p.add_argument("--budget", type=int, default=1200, help="Accepted for command symmetry.")
+    resume_p.add_argument("--json", action="store_true", help="Emit machine-readable snapshot metadata.")
+    resume_p.set_defaults(func=cmd_resume)
+
     mcp_p = sub.add_parser("mcp", help="Run the Edgebase MCP server over stdio.")
     add_subcommand_root(mcp_p)
     mcp_p.set_defaults(func=cmd_mcp)
@@ -212,7 +238,8 @@ def cmd_init(args: argparse.Namespace) -> int:
                 "# Agent Instructions\n\n"
                 "Keep static instructions minimal. For codebase structure, run:\n\n"
                 "```bash\nedgebase context \"<task>\" --budget 1200\n"
-                "edgebase goal \"<goal>\" --budget 1200\n```\n",
+                "edgebase goal \"<goal>\" --budget 1200\n"
+                "edgebase resume\n```\n",
                 encoding="utf-8",
             )
     print(f"Initialized Edgebase at {root / '.edgebase'}")
@@ -253,8 +280,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print(f"{result.action}: {result.path} ({result.detail})")
     print("")
     print("Edgebase is enabled for the selected agents.")
-    print("Restart your agent/IDE. Claude Code injects Edgebase context automatically for coding prompts.")
-    print("Other MCP clients get the Edgebase tool and AGENTS.md routing instructions automatically.")
+    print("Restart your agent/IDE. Claude Code and Codex load Edgebase automatically when hooks are trusted.")
+    print("MCP clients also get edgebase_context and edgebase_goal, with AGENTS.md routing instructions.")
     print("Turn it off with: `edgebase disable --scope {}`".format(args.scope))
     return 0
 
@@ -312,6 +339,57 @@ def cmd_goal(args: argparse.Namespace) -> int:
 def cmd_passport(args: argparse.Namespace) -> int:
     passport = build_patch_passport(args.root, args.goal, args.test, args.changed_file, args.budget)
     print(passport.markdown)
+    return 0
+
+
+def cmd_checkpoint(args: argparse.Namespace) -> int:
+    try:
+        snapshot = create_checkpoint(args.root, args.message, args.budget)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(snapshot.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(f"Checkpoint {snapshot.id} recorded.")
+        print(f"Resume with: edgebase resume {snapshot.id}")
+    return 0
+
+
+def cmd_fork_plan(args: argparse.Namespace) -> int:
+    try:
+        snapshot = create_fork_plan(
+            args.root,
+            args.message,
+            args.budget,
+            from_id=args.from_id,
+            branch=args.branch,
+            path=args.path,
+            allow_dirty=args.allow_dirty,
+        )
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(snapshot.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(f"Fork plan {snapshot.id} created.")
+        print(f"Worktree: {snapshot.worktree_path}")
+        print(f"Branch: {snapshot.worktree_branch}")
+        print(f"Resume with: {snapshot.to_dict()['next_command']}")
+    return 0
+
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    try:
+        snapshot = resume_snapshot(args.root, args.snapshot_id)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(snapshot.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(render_resume(snapshot))
     return 0
 
 

@@ -5,11 +5,12 @@ import os
 import shlex
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from .context import build_context
 from .git import changed_files, find_repo_root, is_git_repo
 from .goal import build_goal_capsule, render_edit_delta, render_work_contract
+from .graph import graph_artifact_summary, write_graph_artifacts
 from .indexer import index_repo
 from .store import Store
 
@@ -161,6 +162,28 @@ def append_unique(items: list[object], value: object) -> None:
         items.append(value)
 
 
+def append_optional_section(text: str, section: str) -> str:
+    return text + ("\n\n" + section if section else "")
+
+
+def safe_graph_artifact_summary(
+    root: str | Path,
+    task: str | None,
+    changed: list[str],
+    selected_files: Iterable[str] | None,
+) -> str:
+    try:
+        artifacts = write_graph_artifacts(
+            root,
+            task=task,
+            changed_files=changed,
+            selected_files=selected_files,
+        )
+    except Exception:
+        return ""
+    return graph_artifact_summary(artifacts)
+
+
 def handle_git_post_commit(root: str | Path) -> int:
     result = index_repo(root)
     print(f"edgebase indexed {result.files} files at {result.commit_sha}")
@@ -196,10 +219,11 @@ def handle_claude_user_prompt_submit(root: str | Path) -> int:
             index_repo(repo_root)
         changed = changed_files(repo_root)
         capsule = build_context(repo_root, prompt, changed, budget=1100)
+        graph_summary = safe_graph_artifact_summary(repo_root, prompt, changed, capsule.selected_files)
         msg = (
             "Edgebase automatic context for this coding prompt. "
             "Use this source-backed capsule as the first read set before broad exploration or edits.\n\n"
-            f"{capsule.markdown}"
+            f"{append_optional_section(capsule.markdown, graph_summary)}"
         )
     except Exception as exc:
         msg = f"Edgebase automatic context was unavailable: {exc}. Continue with normal repository exploration."
@@ -214,9 +238,10 @@ def handle_claude_pre_tool_use(root: str | Path) -> int:
     goal = extract_goal(payload) or "pending edit"
     try:
         capsule = build_goal_capsule(repo_root, goal, touched, budget=700)
+        graph_summary = graph_artifact_summary(capsule.graph_artifacts)
         msg = (
             "Edgebase pre-edit Work Contract. Use this contract before writing files.\n\n"
-            f"{render_work_contract(capsule.contract)}"
+            f"{append_optional_section(render_work_contract(capsule.contract), graph_summary)}"
         )
     except Exception as exc:
         msg = f"Edgebase pre-edit Work Contract was unavailable: {exc}."
@@ -232,9 +257,10 @@ def handle_claude_post_tool_use(root: str | Path) -> int:
         index_repo(repo_root, touched, reset=False)
         task = extract_goal(payload) or "recent edit"
         delta = render_edit_delta(repo_root, str(task), touched, budget=700)
+        graph_summary = safe_graph_artifact_summary(repo_root, str(task), touched, None)
         msg = (
             f"Edgebase refreshed {len(touched)} edited file(s).\n\n"
-            f"{delta}"
+            f"{append_optional_section(delta, graph_summary)}"
         )
     else:
         msg = "Edgebase hook ran but found no edited file path in the tool input."

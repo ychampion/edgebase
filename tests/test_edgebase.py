@@ -15,9 +15,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from edgebase import __version__
 from edgebase.benchmark import run_external
+from edgebase.cli import main as edgebase_main
 from edgebase.context import build_context
 from edgebase.doctor import run_doctor
 from edgebase.goal import build_goal_capsule, build_patch_passport
+from edgebase.graph import build_graph_export, render_dot, render_html, render_json, write_graph_artifacts
 from edgebase.hooks import (
     handle_claude_post_tool_use,
     handle_claude_pre_tool_use,
@@ -83,6 +85,8 @@ class EdgebaseTests(unittest.TestCase):
             self.assertIn("app/auth.py", capsule.contract.selected_files)
             self.assertIn("tests/test_auth.py", capsule.contract.blast_radius)
             self.assertIn("pytest tests/test_auth.py", capsule.contract.test_plan)
+            self.assertIn("html", capsule.graph_artifacts)
+            self.assertTrue(Path(capsule.graph_artifacts["html"]).exists())
             self.assertEqual(
                 set(capsule.contract.to_dict()),
                 {
@@ -100,6 +104,46 @@ class EdgebaseTests(unittest.TestCase):
                     "provenance",
                 },
             )
+
+    def test_graph_export_model_and_static_artifacts(self) -> None:
+        with sample_repo() as repo:
+            index_repo(repo)
+            export = build_graph_export(
+                repo,
+                task="change login hashing behavior",
+                changed_files=["app/auth.py"],
+                selected_files=["app/auth.py", "tests/test_auth.py"],
+            )
+            node_ids = {node.id for node in export.nodes}
+            self.assertEqual(export.scope, "task")
+            self.assertIn("app/auth.py", node_ids)
+            self.assertIn("tests/test_auth.py", node_ids)
+            self.assertTrue(any(edge.rel == "TESTS" for edge in export.edges))
+
+            payload = json.loads(render_json(export))
+            self.assertEqual(payload["scope"], "task")
+            self.assertIn("digraph edgebase", render_dot(export))
+
+            html = render_html(export)
+            self.assertNotIn("http://", html)
+            self.assertNotIn("https://", html)
+            embedded = html.split('<script id="edgebase-data" type="application/json">', 1)[1].split(
+                "</script>", 1
+            )[0]
+            self.assertEqual(json.loads(embedded)["scope"], "task")
+
+            artifacts = write_graph_artifacts(
+                repo,
+                task="change login hashing behavior",
+                changed_files=["app/auth.py"],
+                selected_files=["app/auth.py", "tests/test_auth.py"],
+            )
+            self.assertEqual(set(artifacts), {"html", "json", "dot"})
+            for path in artifacts.values():
+                self.assertTrue(Path(path).exists())
+            written_html = Path(artifacts["html"]).read_text(encoding="utf-8")
+            self.assertNotIn("http://", written_html)
+            self.assertNotIn("https://", written_html)
 
     def test_goal_cli_json_emits_contract_schema(self) -> None:
         with sample_repo() as repo:
@@ -175,7 +219,16 @@ class EdgebaseTests(unittest.TestCase):
             listed = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
             self.assertIsNotNone(listed)
             tools = listed["result"]["tools"]
-            self.assertEqual([tool["name"] for tool in tools], ["edgebase_context", "edgebase_goal"])
+            self.assertEqual(
+                [tool["name"] for tool in tools],
+                [
+                    "edgebase_context",
+                    "edgebase_goal",
+                    "edgebase_checkpoint",
+                    "edgebase_fork_plan",
+                    "edgebase_resume",
+                ],
+            )
 
             prompts = server.handle({"jsonrpc": "2.0", "id": 3, "method": "prompts/list"})
             self.assertIsNotNone(prompts)
@@ -196,6 +249,9 @@ class EdgebaseTests(unittest.TestCase):
             text = called["result"]["content"][0]["text"]
             self.assertIn("# Edgebase Context", text)
             self.assertIn("app/auth.py", text)
+            self.assertIn("Edgebase graph artifacts:", text)
+            context_artifacts = called["result"]["structuredContent"]["graph_artifacts"]
+            self.assertTrue(Path(context_artifacts["html"]).exists())
 
             prompt = server.handle(
                 {
@@ -209,6 +265,7 @@ class EdgebaseTests(unittest.TestCase):
             prompt_text = prompt["result"]["messages"][0]["content"]["text"]
             self.assertIn("# Edgebase Context", prompt_text)
             self.assertIn("first read set", prompt_text)
+            self.assertIn("Edgebase graph artifacts:", prompt_text)
 
             goal_called = server.handle(
                 {
@@ -224,7 +281,10 @@ class EdgebaseTests(unittest.TestCase):
             self.assertIsNotNone(goal_called)
             goal_text = goal_called["result"]["content"][0]["text"]
             self.assertIn("# Edgebase Goal Capsule", goal_text)
+            self.assertIn("Edgebase graph artifacts:", goal_text)
             self.assertIn("app/auth.py", goal_called["result"]["structuredContent"]["selected_files"])
+            goal_artifacts = goal_called["result"]["structuredContent"]["graph_artifacts"]
+            self.assertTrue(Path(goal_artifacts["html"]).exists())
 
             goal_prompt = server.handle(
                 {
@@ -238,6 +298,74 @@ class EdgebaseTests(unittest.TestCase):
             goal_prompt_text = goal_prompt["result"]["messages"][0]["content"]["text"]
             self.assertIn("# Edgebase Goal Capsule", goal_prompt_text)
             self.assertIn("executable work contract", goal_prompt_text)
+            self.assertIn("Edgebase graph artifacts:", goal_prompt_text)
+
+    def test_mcp_exposes_context_branch_tools(self) -> None:
+        with sample_repo() as repo, tempfile.TemporaryDirectory() as tmp:
+            index_repo(repo)
+            server = McpServer(repo)
+            checkpoint = server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "edgebase_checkpoint",
+                        "arguments": {"message": "mcp checkpoint"},
+                    },
+                }
+            )
+            self.assertIsNotNone(checkpoint)
+            checkpoint_data = checkpoint["result"]["structuredContent"]
+            self.assertEqual(checkpoint_data["kind"], "checkpoint")
+
+            resumed = server.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "edgebase_resume",
+                        "arguments": {"snapshot_id": checkpoint_data["id"]},
+                    },
+                }
+            )
+            self.assertIsNotNone(resumed)
+            self.assertIn("# Edgebase Resume", resumed["result"]["content"][0]["text"])
+            self.assertEqual(resumed["result"]["structuredContent"]["id"], checkpoint_data["id"])
+
+            worktree = Path(tmp) / "mcp-fork"
+            try:
+                forked = server.handle(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "edgebase_fork_plan",
+                            "arguments": {
+                                "message": "mcp fork",
+                                "path": str(worktree),
+                                "from_id": checkpoint_data["id"],
+                            },
+                        },
+                    }
+                )
+                self.assertIsNotNone(forked)
+                fork_data = forked["result"]["structuredContent"]
+                self.assertEqual(fork_data["kind"], "fork-plan")
+                self.assertEqual(fork_data["parent_id"], checkpoint_data["id"])
+                self.assertEqual(fork_data["worktree_path"], str(worktree.resolve()))
+                self.assertTrue((worktree / ".git").exists())
+            finally:
+                subprocess.run(
+                    ["git", "worktree", "remove", "--force", str(worktree)],
+                    cwd=repo,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                    check=False,
+                )
 
     def test_mcp_cli_accepts_root_after_subcommand(self) -> None:
         with sample_repo() as repo:
@@ -262,6 +390,7 @@ class EdgebaseTests(unittest.TestCase):
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertIn("edgebase_context", proc.stdout)
+            self.assertIn("edgebase_checkpoint", proc.stdout)
 
     def test_setup_writes_project_agent_configs_without_overwriting_agents_md(self) -> None:
         with sample_repo() as repo:
@@ -279,6 +408,7 @@ class EdgebaseTests(unittest.TestCase):
             self.assertTrue(agents_md.startswith("# Existing\n"))
             self.assertIn(AGENT_DOC_START, agents_md)
             self.assertIn("Do not wait for the user", agents_md)
+            self.assertIn("edgebase_checkpoint", agents_md)
 
             claude = json.loads((repo / ".mcp.json").read_text(encoding="utf-8"))
             self.assertIn("-m", claude["mcpServers"]["edgebase"]["args"])
@@ -287,6 +417,7 @@ class EdgebaseTests(unittest.TestCase):
             skill = (repo / ".claude" / "skills" / "edgebase" / "SKILL.md").read_text(encoding="utf-8")
             self.assertIn("name: edgebase", skill)
             self.assertIn("argument-hint", skill)
+            self.assertIn("edgebase_resume", skill)
 
             goal_skill = (repo / ".claude" / "skills" / "goal" / "SKILL.md").read_text(encoding="utf-8")
             self.assertIn("name: goal", goal_skill)
@@ -368,6 +499,8 @@ class EdgebaseTests(unittest.TestCase):
             self.assertEqual(output["hookEventName"], "UserPromptSubmit")
             self.assertIn("# Edgebase Context", output["additionalContext"])
             self.assertIn("app/auth.py", output["additionalContext"])
+            self.assertIn("Edgebase graph artifacts:", output["additionalContext"])
+            self.assertTrue((repo / ".edgebase" / "graphs" / "latest.html").exists())
 
     def test_claude_pre_tool_hook_injects_work_contract(self) -> None:
         with sample_repo() as repo:
@@ -393,6 +526,8 @@ class EdgebaseTests(unittest.TestCase):
             self.assertEqual(output["hookEventName"], "PreToolUse")
             self.assertIn("# Edgebase Work Contract", output["additionalContext"])
             self.assertIn("app/auth.py", output["additionalContext"])
+            self.assertIn("Edgebase graph artifacts:", output["additionalContext"])
+            self.assertTrue((repo / ".edgebase" / "graphs" / "latest.html").exists())
 
     def test_claude_post_tool_hook_emits_edit_delta(self) -> None:
         with sample_repo() as repo:
@@ -423,6 +558,8 @@ class EdgebaseTests(unittest.TestCase):
             self.assertEqual(output["hookEventName"], "PostToolUse")
             self.assertIn("# Edgebase Edit Delta", output["additionalContext"])
             self.assertIn("tests/test_auth.py", output["additionalContext"])
+            self.assertIn("Edgebase graph artifacts:", output["additionalContext"])
+            self.assertTrue((repo / ".edgebase" / "graphs" / "latest.html").exists())
 
     def test_patch_passport_records_explicit_tests_only(self) -> None:
         with sample_repo() as repo:
@@ -528,6 +665,142 @@ class EdgebaseTests(unittest.TestCase):
             payload = json.loads(proc.stdout)
             self.assertIn("app/auth.py", payload["stale_files"])
 
+    def test_checkpoint_creates_and_resumes_snapshot(self) -> None:
+        with sample_repo() as repo:
+            index_repo(repo)
+            code, stdout, stderr = run_cli(
+                ["--root", str(repo), "checkpoint", "understood auth flow", "--json"]
+            )
+            self.assertEqual(code, 0, stderr)
+            data = json.loads(stdout)
+            self.assertLessEqual(
+                {
+                    "id",
+                    "kind",
+                    "message",
+                    "repo_root",
+                    "branch",
+                    "commit_sha",
+                    "dirty",
+                    "changed_files",
+                    "context_markdown",
+                    "token_estimate",
+                    "stale_files",
+                    "next_command",
+                },
+                set(data),
+            )
+            self.assertEqual(data["kind"], "checkpoint")
+            self.assertEqual(data["message"], "understood auth flow")
+            self.assertFalse(data["dirty"])
+            self.assertEqual(data["changed_files"], [])
+            self.assertIn("app/auth.py", data["context_markdown"])
+
+            code, resume, stderr = run_cli(["--root", str(repo), "resume", data["id"]])
+            self.assertEqual(code, 0, stderr)
+            self.assertIn(f"Snapshot: `{data['id']}`", resume)
+            self.assertIn("understood auth flow", resume)
+            self.assertIn("# Edgebase Context", resume)
+
+    def test_resume_defaults_latest_and_supports_explicit_snapshot(self) -> None:
+        with sample_repo() as repo:
+            first = json.loads(
+                run_cli(["--root", str(repo), "checkpoint", "first checkpoint", "--json"])[1]
+            )
+            second = json.loads(
+                run_cli(["--root", str(repo), "checkpoint", "second checkpoint", "--json"])[1]
+            )
+
+            code, latest, stderr = run_cli(["--root", str(repo), "resume", "--json"])
+            self.assertEqual(code, 0, stderr)
+            self.assertEqual(json.loads(latest)["id"], second["id"])
+
+            code, explicit, stderr = run_cli(["--root", str(repo), "resume", first["id"], "--json"])
+            self.assertEqual(code, 0, stderr)
+            self.assertEqual(json.loads(explicit)["id"], first["id"])
+
+    def test_fork_plan_creates_worktree_and_copies_resume_snapshot(self) -> None:
+        with sample_repo() as repo, tempfile.TemporaryDirectory() as tmp:
+            parent = json.loads(
+                run_cli(["--root", str(repo), "checkpoint", "base auth understanding", "--json"])[1]
+            )
+            worktree = Path(tmp) / "auth-session-plan"
+            branch = "edgebase/test-auth-session-plan"
+            try:
+                code, stdout, stderr = run_cli(
+                    [
+                        "--root",
+                        str(repo),
+                        "fork-plan",
+                        "try auth sessions",
+                        "--from",
+                        parent["id"],
+                        "--branch",
+                        branch,
+                        "--path",
+                        str(worktree),
+                        "--json",
+                    ]
+                )
+                self.assertEqual(code, 0, stderr)
+                data = json.loads(stdout)
+                self.assertEqual(data["kind"], "fork-plan")
+                self.assertEqual(data["parent_id"], parent["id"])
+                self.assertEqual(data["worktree_path"], str(worktree.resolve()))
+                self.assertEqual(data["worktree_branch"], branch)
+                self.assertTrue((worktree / ".git").exists())
+
+                proc = subprocess.run(
+                    ["git", "branch", "--show-current"],
+                    cwd=worktree,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=10,
+                    check=False,
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(proc.stdout.strip(), branch)
+
+                code, child_resume, stderr = run_cli(
+                    ["--root", str(worktree), "resume", data["id"], "--json"]
+                )
+                self.assertEqual(code, 0, stderr)
+                self.assertEqual(json.loads(child_resume)["id"], data["id"])
+            finally:
+                subprocess.run(
+                    ["git", "worktree", "remove", "--force", str(worktree)],
+                    cwd=repo,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                    check=False,
+                )
+
+    def test_fork_plan_refuses_dirty_working_tree_without_explicit_flag(self) -> None:
+        with sample_repo() as repo, tempfile.TemporaryDirectory() as tmp:
+            (repo / "app" / "auth.py").write_text(
+                (repo / "app" / "auth.py").read_text(encoding="utf-8")
+                + "\ndef dirty_marker() -> None:\n    return None\n",
+                encoding="utf-8",
+            )
+            worktree = Path(tmp) / "dirty-plan"
+            code, stdout, stderr = run_cli(
+                [
+                    "--root",
+                    str(repo),
+                    "fork-plan",
+                    "try dirty auth plan",
+                    "--path",
+                    str(worktree),
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertEqual(stdout, "")
+            self.assertIn("fork-plan refused", stderr)
+            self.assertIn("app/auth.py", stderr)
+            self.assertFalse(worktree.exists())
+
 
 class sample_repo:
     def __enter__(self) -> Path:
@@ -577,6 +850,14 @@ class sample_repo:
 
 def run(cwd: Path, *args: str) -> None:
     subprocess.run(args, cwd=cwd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def run_cli(argv: list[str]) -> tuple[int, str, str]:
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        code = edgebase_main(argv)
+    return code, stdout.getvalue(), stderr.getvalue()
 
 
 if __name__ == "__main__":

@@ -17,6 +17,12 @@ context ranker
         v
 edgebase_context(task, changed_files?, budget?)
 edgebase_goal(goal, changed_files?, budget?)
+edgebase_checkpoint(message, budget?)
+edgebase_fork_plan(message, from_id?, branch?, path?, allow_dirty?, budget?)
+edgebase_resume(snapshot_id?)
+        |
+        v
+.edgebase/graphs/latest.{html,json,dot}
 ```
 
 ## Design Constraints
@@ -37,12 +43,24 @@ Tables:
 - `symbols`: name, kind, file, line, signature, exported marker, confidence.
 - `edges`: typed relationships with source path, line, extractor, confidence, commit, freshness.
 - `file_metrics`: owner, author counts, recent commits, churn count.
+- `context_snapshots`: local checkpoint and fork-plan records for cross-agent resume.
 
 The cache can be deleted at any time and rebuilt with:
 
 ```bash
 python3 -m edgebase index
 ```
+
+## Graph Artifacts
+
+Edgebase writes optional graph artifacts under `.edgebase/graphs/latest.html`, `.edgebase/graphs/latest.json`, and `.edgebase/graphs/latest.dot` when hooks or MCP context/goal calls run. These files are local, rebuildable, and ignored with the rest of `.edgebase/`.
+
+The artifacts are deliberately auxiliary:
+
+- hooks and MCP calls surface file paths to the artifacts
+- graph rendering failures do not block context or Goal Capsule generation
+- HTML is static and self-contained, with no CDN or external network assets
+- agent context receives paths, not raw graph dumps
 
 ## Extraction
 
@@ -66,7 +84,7 @@ Freshness paths:
 - Git `post-commit` hook: refresh after commits.
 - Claude Code `UserPromptSubmit` hook: inject a small context capsule next to likely coding prompts.
 - Claude Code `PreToolUse` hook: inject a pre-edit Work Contract before Write/Edit/MultiEdit.
-- Claude Code `PostToolUse` hook: async refresh and edit-delta reporting after Write/Edit/MultiEdit.
+- Claude Code `PostToolUse` hook: async refresh, graph artifact update, and edit-delta reporting after Write/Edit/MultiEdit.
 - MCP server startup: indexes the repo automatically if no cache exists.
 
 ## Context Ranking
@@ -99,12 +117,22 @@ The returned capsule includes:
 
 `edgebase passport` runs after edits and produces a Patch Passport from the current diff plus explicit test evidence. Edgebase records only tests supplied with `--test`; it never infers that a check passed.
 
+## Context Branches
+
+Context Branches store local continuity records in `.edgebase/index.sqlite3` and expose them through both CLI commands and MCP tools:
+
+- `edgebase checkpoint "message"` captures current branch, commit, dirty state, changed files, and a context capsule.
+- `edgebase fork-plan "message"` refuses dirty trees by default, creates a git worktree branch from `HEAD`, and stores fork metadata in both the source and fork worktree caches.
+- `edgebase resume [id]` renders the latest or selected record as Markdown or JSON.
+
+Snapshots are local state, not git commits. Running `edgebase index` refreshes graph tables without deleting saved context snapshots.
+
 ## Agent Integration Boundary
 
 Edgebase does not try to control agents. It gives them a reliable tool, a small instruction marker, and client-specific automation where the client has documented hooks:
 
 ```text
-Use injected Edgebase context when present; otherwise call edgebase_context or edgebase_goal before broad exploration or edits.
+Use injected Edgebase context when present; otherwise call edgebase_context or edgebase_goal before broad exploration or edits. Use Context Branch tools for checkpoints, forked plans, and resumes.
 ```
 
 Claude Code has documented prompt and tool hooks, so Edgebase provides:
@@ -116,7 +144,7 @@ Claude Code has documented prompt and tool hooks, so Edgebase provides:
 - project skill `/edgebase <task>` for explicit manual refresh.
 - project skill `/goal <goal>` for explicit Goal Capsules.
 
-Other clients are MCP-first until their hook semantics are stable and documented. For those clients, setup writes MCP config and an `AGENTS.md` marker that instructs the agent to route broad structural context through Edgebase automatically. Edgebase also exposes MCP prompts named `edgebase` and `goal` for clients that surface prompt menus.
+Other clients are MCP-first until their hook semantics are stable and documented. For those clients, setup writes MCP config and an `AGENTS.md` marker that instructs the agent to route broad structural context and continuity checkpoints through Edgebase automatically. Edgebase also exposes MCP prompts named `edgebase` and `goal` for clients that surface prompt menus. MCP calls update the same local graph artifacts and return their paths in structured content.
 
 ## Failure Modes
 

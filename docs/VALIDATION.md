@@ -54,6 +54,12 @@ python3 -m edgebase setup --scope project --agents claude,codex,cursor,gemini,op
 python3 -m edgebase doctor --scope project --agents claude,codex,cursor,gemini,opencode
 python3 -m edgebase goal "change login hashing behavior" --changed-file tests/test_edgebase.py --json
 python3 -m edgebase passport "change login hashing behavior" --test "python3 -m unittest -v: pass"
+python3 -m edgebase checkpoint "release smoke checkpoint"
+python3 -m edgebase resume
+EDGEBASE_RELEASE_FORK="$(mktemp -d)/fork"
+python3 -m edgebase fork-plan "release smoke fork" --path "$EDGEBASE_RELEASE_FORK" --allow-dirty
+python3 -m edgebase resume --root "$EDGEBASE_RELEASE_FORK"
+git worktree remove --force "$EDGEBASE_RELEASE_FORK"
 printf '{"prompt":"change login hashing behavior"}' | python3 -m edgebase hooks claude-user-prompt-submit --root .
 printf '{"goal":"change login hashing behavior","tool_input":{"file_path":"tests/test_edgebase.py"}}' | python3 -m edgebase hooks claude-pre-tool-use --root .
 ```
@@ -75,7 +81,7 @@ Where binaries are available:
 - Gemini CLI: `gemini mcp list`
 - OpenCode: `opencode mcp list`
 
-For Claude Code, also validate that `.claude/settings.json` contains `UserPromptSubmit`, `PreToolUse`, and `PostToolUse`, and that `.claude/skills/edgebase/SKILL.md` plus `.claude/skills/goal/SKILL.md` exist. For clients not installed in the verification environment, validate the generated config shape and the Edgebase MCP stdio handshake.
+For Claude Code, also validate that `.claude/settings.json` contains `UserPromptSubmit`, `PreToolUse`, and `PostToolUse`, and that `.claude/skills/edgebase/SKILL.md` plus `.claude/skills/goal/SKILL.md` exist. For clients not installed in the verification environment, validate the generated config shape and the Edgebase MCP stdio handshake, including `edgebase_context`, `edgebase_goal`, `edgebase_checkpoint`, `edgebase_fork_plan`, and `edgebase_resume` in `tools/list`.
 
 ## Kill Criteria
 
