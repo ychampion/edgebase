@@ -86,16 +86,9 @@ def mcp_stdio_check(repo_root: Path) -> Check:
         if isinstance(result, dict) and isinstance(result.get("tools"), list):
             tools = result["tools"]
     tool_names = {str(tool.get("name")) for tool in tools if isinstance(tool, dict)}
-    required = {
-        "edgebase_context",
-        "edgebase_goal",
-        "edgebase_checkpoint",
-        "edgebase_fork_plan",
-        "edgebase_resume",
-    }
-    missing = required - tool_names
+    missing = {"edgebase_context", "edgebase_goal"} - tool_names
     if not missing:
-        return Check("mcp-stdio", "ok", "Edgebase MCP tools listed")
+        return Check("mcp-stdio", "ok", "edgebase_context and edgebase_goal listed")
     return Check("mcp-stdio", "fail", "missing from tools/list: " + ", ".join(sorted(missing)))
 
 

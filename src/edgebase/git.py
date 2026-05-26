@@ -89,14 +89,9 @@ def changed_files(root: Path) -> list[str]:
         raw = line[3:].strip()
         if " -> " in raw:
             raw = raw.split(" -> ", 1)[1]
-        raw = raw.strip('"')
-        if raw and not is_edgebase_cache_path(raw):
-            paths.append(raw)
+        if raw:
+            paths.append(raw.strip('"'))
     return sorted(set(paths))
-
-
-def is_edgebase_cache_path(path: str) -> bool:
-    return ".edgebase" in Path(path).parts
 
 
 def file_sha(path: Path) -> str:

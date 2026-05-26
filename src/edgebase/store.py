@@ -94,31 +94,11 @@ class Store:
               recent_commits_json TEXT NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS context_snapshots (
-              id TEXT PRIMARY KEY,
-              kind TEXT NOT NULL,
-              message TEXT NOT NULL,
-              repo_root TEXT NOT NULL,
-              branch TEXT NOT NULL,
-              commit_sha TEXT NOT NULL,
-              dirty INTEGER NOT NULL,
-              changed_files_json TEXT NOT NULL,
-              context_markdown TEXT NOT NULL,
-              token_estimate INTEGER NOT NULL,
-              stale_files_json TEXT NOT NULL,
-              parent_id TEXT NOT NULL,
-              worktree_path TEXT NOT NULL,
-              worktree_branch TEXT NOT NULL,
-              created_at TEXT NOT NULL
-            );
-
             CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
             CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_path);
             CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src_type, src_key);
             CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst_type, dst_key);
             CREATE INDEX IF NOT EXISTS idx_edges_file ON edges(file_path);
-            CREATE INDEX IF NOT EXISTS idx_context_snapshots_created
-              ON context_snapshots(created_at);
             """
         )
 
