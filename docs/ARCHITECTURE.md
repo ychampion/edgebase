@@ -17,6 +17,9 @@ context ranker
         v
 edgebase_context(task, changed_files?, budget?)
 edgebase_goal(goal, changed_files?, budget?)
+edgebase_checkpoint(message, budget?)
+edgebase_fork_plan(message, from_id?, branch?, path?, allow_dirty?, budget?)
+edgebase_resume(snapshot_id?)
         |
         v
 .edgebase/graphs/latest.html|json|dot
@@ -66,16 +69,18 @@ Dynamic call edges are not presented as facts. They are low-confidence leads unl
 
 ## Freshness
 
-Freshness is checked with file hashes. A context or goal capsule reports stale files when the working tree no longer matches the indexed hash.
+Freshness is checked with file hashes, git HEAD, the working tree fingerprint, and a short-lived preflight state file. A context or goal capsule reports stale files when the working tree no longer matches the indexed hash. A preflight capsule is considered stale when it expires, HEAD changes, the working tree changes after recording, or the index reports stale files.
 
 Freshness paths:
 
 - `edgebase index`: full rebuild.
 - `edgebase index --changed`: incremental refresh for git-changed files.
 - Git `post-commit` hook: refresh after commits.
-- Claude Code `UserPromptSubmit` hook: inject a small context capsule next to likely coding prompts.
-- Claude Code `PreToolUse` hook: inject a pre-edit Work Contract before Write/Edit/MultiEdit.
-- Claude Code `PostToolUse` hook: async refresh, edit-delta reporting, and graph artifact update after Write/Edit/MultiEdit.
+- Claude Code and Codex `UserPromptSubmit` hooks: record and inject a Goal Capsule before the agent plans.
+- Claude Code and Codex `PreToolUse` hooks: block Write/Edit/MultiEdit when no fresh Goal Capsule exists.
+- Claude Code and Codex `PostToolUse` hooks: async refresh, edit-delta reporting, and graph artifact update after Write/Edit/MultiEdit.
+- Claude Code `PreCompact` and Codex `PreCompact` hooks: save `.edgebase/checkpoints/latest.md` before compaction.
+- Claude Code `SessionEnd` and Codex `Stop` hooks: save `.edgebase/passports/latest.md` and `.json`.
 - MCP server startup: indexes the repo automatically if no cache exists.
 
 ## Context Ranking
@@ -108,6 +113,8 @@ The returned capsule includes:
 
 `edgebase passport` runs after edits and produces a Patch Passport from the current diff plus explicit test evidence. Edgebase records only tests supplied with `--test`; it never infers that a check passed.
 
+`edgebase checkpoint`, `edgebase fork-plan`, and `edgebase resume` preserve compact context across compaction, handoff, and git worktree branching. They reuse the context ranker rather than adding a separate memory store.
+
 ## Agent Integration Boundary
 
 Edgebase does not try to control agents. It gives them a reliable tool, a small instruction marker, and client-specific automation where the client has documented hooks:
@@ -118,14 +125,18 @@ Use injected Edgebase context when present; otherwise call edgebase_context or e
 
 Claude Code has documented prompt and tool hooks, so Edgebase provides:
 
-- `UserPromptSubmit`: prompt-time context capsule before Claude explores.
+- `UserPromptSubmit`: Goal Capsule before Claude plans.
 - `SessionStart`: freshness summary when a session opens.
-- `PreToolUse`: pre-edit Work Contract before Write/Edit/MultiEdit.
+- `PreToolUse`: stale-capsule block before Write/Edit/MultiEdit.
 - `PostToolUse`: async refresh and edit delta after Write/Edit/MultiEdit.
+- `PreCompact`: context checkpoint before compaction.
+- `SessionEnd`: Patch Passport at session end.
 - project skill `/edgebase <task>` for explicit manual refresh.
 - project skill `/goal <goal>` for explicit Goal Capsules.
 
-Other clients are MCP-first until their hook semantics are stable and documented. For those clients, setup writes MCP config and an `AGENTS.md` marker that instructs the agent to route broad structural context through Edgebase automatically. Edgebase also exposes MCP prompts named `edgebase` and `goal` for clients that surface prompt menus.
+Codex setup is MCP plus project-scoped hooks and skills. Edgebase writes `.codex/config.toml`, `[features] hooks = true`, `.codex/hooks.json`, `.agents/skills/edgebase`, and `.agents/skills/goal`. When project hooks are trusted, Codex receives the same preflight gate: prompt-time capsule, stale edit block, post-edit refresh, pre-compact checkpoint, and stop-time Patch Passport.
+
+Cursor, Gemini CLI, OpenCode, and Windsurf are MCP-first. For those clients, setup writes MCP config and an `AGENTS.md` marker that instructs the agent to route broad structural context through Edgebase automatically. Edgebase also exposes MCP prompts named `edgebase` and `goal` for clients that surface prompt menus.
 
 MCP tool and prompt responses also refresh graph artifacts and return the local artifact paths when rendering succeeds. Rendering failures are non-fatal; Edgebase must still return the context or Goal Capsule.
 

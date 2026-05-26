@@ -9,7 +9,13 @@ from pathlib import Path
 
 from .git import find_repo_root
 from .indexer import index_repo
-from .setup import CLAUDE_GOAL_SKILL_START, CLAUDE_SKILL_START, normalize_agents
+from .setup import (
+    CLAUDE_GOAL_SKILL_START,
+    CLAUDE_SKILL_START,
+    CODEX_GOAL_SKILL_START,
+    CODEX_SKILL_START,
+    normalize_agents,
+)
 from .store import Store
 
 
@@ -86,9 +92,10 @@ def mcp_stdio_check(repo_root: Path) -> Check:
         if isinstance(result, dict) and isinstance(result.get("tools"), list):
             tools = result["tools"]
     tool_names = {str(tool.get("name")) for tool in tools if isinstance(tool, dict)}
-    missing = {"edgebase_context", "edgebase_goal"} - tool_names
+    expected = {"edgebase_context", "edgebase_goal", "edgebase_checkpoint", "edgebase_fork_plan", "edgebase_resume"}
+    missing = expected - tool_names
     if not missing:
-        return Check("mcp-stdio", "ok", "edgebase_context and edgebase_goal listed")
+        return Check("mcp-stdio", "ok", "Edgebase MCP tools listed")
     return Check("mcp-stdio", "fail", "missing from tools/list: " + ", ".join(sorted(missing)))
 
 
@@ -112,11 +119,11 @@ def agent_config_checks(repo_root: Path, agents: set[str], scope: str) -> list[C
             )
         )
     if "codex" in agents and scope in {"project", "both"}:
-        checks.append(
-            text_contains_check(
-                repo_root / ".codex" / "config.toml", "[mcp_servers.edgebase]", "Codex project config"
-            )
-        )
+        checks.append(text_contains_check(repo_root / ".codex" / "config.toml", "[mcp_servers.edgebase]", "Codex project config"))
+        checks.append(text_contains_check(repo_root / ".codex" / "config.toml", "hooks = true", "Codex hooks feature"))
+        checks.append(codex_hooks_check(repo_root / ".codex" / "hooks.json"))
+        checks.append(text_contains_check(repo_root / ".agents" / "skills" / "edgebase" / "SKILL.md", CODEX_SKILL_START, "Codex /edgebase skill"))
+        checks.append(text_contains_check(repo_root / ".agents" / "skills" / "goal" / "SKILL.md", CODEX_GOAL_SKILL_START, "Codex /goal skill"))
     if "codex" in agents and scope in {"global", "both"}:
         checks.append(
             text_contains_check(Path.home() / ".codex" / "config.toml", "[mcp_servers.edgebase]", "Codex global config")
@@ -183,12 +190,39 @@ def claude_hooks_check(path: Path) -> Check:
             "claude-session-start",
             "claude-pre-tool-use",
             "claude-post-tool-use",
+            "claude-pre-compact",
+            "claude-session-end",
         )
         if name not in rendered
     ]
     if missing:
         return Check("Claude Code hooks", "warn", "missing " + ", ".join(missing))
     return Check("Claude Code hooks", "ok", str(path))
+
+
+def codex_hooks_check(path: Path) -> Check:
+    if not path.exists():
+        return Check("Codex hooks", "warn", f"missing {path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return Check("Codex hooks", "fail", f"invalid JSON: {exc}")
+    rendered = json.dumps(data) if isinstance(data, dict) else ""
+    missing = [
+        name
+        for name in (
+            "codex-session-start",
+            "codex-user-prompt-submit",
+            "codex-pre-tool-use",
+            "codex-post-tool-use",
+            "codex-pre-compact",
+            "codex-stop",
+        )
+        if name not in rendered
+    ]
+    if missing:
+        return Check("Codex hooks", "warn", "missing " + ", ".join(missing))
+    return Check("Codex hooks", "ok", str(path))
 
 
 def text_contains_check(path: Path, needle: str, label: str) -> Check:

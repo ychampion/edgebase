@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.3 - 2026-05-26
+
 ### Added
 
 - Goal Capsules with `edgebase goal`, `edgebase_goal`, and MCP prompt `goal`.
@@ -9,11 +11,16 @@
 - Patch Passports with `edgebase passport` for changed files, evidence, explicit tests, risk, and review focus.
 - Claude Code project skill `/goal <goal>`.
 - Local `.edgebase/graphs/latest.html`, `.json`, and `.dot` artifacts refreshed by hooks and MCP calls for optional visual inspection.
+- Edgebase Preflight Gate: Claude Code `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, and `SessionEnd` hooks now record a Goal Capsule before planning, block broad edits when the capsule is missing or stale, refresh after edits, checkpoint before compaction, and save a Patch Passport at session end.
+- Codex project setup now writes MCP config, `[features] hooks = true`, `.codex/hooks.json`, and project skills under `.agents/skills/edgebase` and `.agents/skills/goal`.
+- Context branch commands and MCP tools: `edgebase checkpoint`, `edgebase fork-plan`, `edgebase resume`, `edgebase_checkpoint`, `edgebase_fork_plan`, and `edgebase_resume`.
+- `edgebase preflight status` and `edgebase preflight refresh` for inspecting or manually refreshing the edit gate.
 
 ### Changed
 
 - Claude Code PostToolUse refresh now reports an edit delta with impacted files, checks, and unverified related context.
 - Documentation now positions Goal Capsules as the executable work-contract surface.
+- `edgebase setup` and `edgebase doctor` now validate automatic preflight integrations for both Claude Code and Codex instead of relying on users to ask for `edgebase_context`.
 
 ## 0.1.2 - 2026-05-26
 

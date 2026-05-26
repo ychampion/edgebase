@@ -50,12 +50,18 @@ For every release:
 ```bash
 python3 -m unittest -v
 python3 -m compileall -q src tests
-python3 -m edgebase setup --scope project --agents claude,codex,cursor,gemini,opencode --no-hooks
+python3 -m edgebase setup --scope project --agents claude,codex,cursor,gemini,opencode
 python3 -m edgebase doctor --scope project --agents claude,codex,cursor,gemini,opencode
 python3 -m edgebase goal "change login hashing behavior" --changed-file tests/test_edgebase.py --json
+python3 -m edgebase preflight refresh "change login hashing behavior" --changed-file tests/test_edgebase.py --json
+python3 -m edgebase preflight status --json
 python3 -m edgebase passport "change login hashing behavior" --test "python3 -m unittest -v: pass"
+python3 -m edgebase checkpoint "release smoke checkpoint"
+python3 -m edgebase resume
 printf '{"prompt":"change login hashing behavior"}' | python3 -m edgebase hooks claude-user-prompt-submit --root .
 printf '{"goal":"change login hashing behavior","tool_input":{"file_path":"tests/test_edgebase.py"}}' | python3 -m edgebase hooks claude-pre-tool-use --root .
+printf '{"prompt":"change login hashing behavior"}' | python3 -m edgebase hooks codex-user-prompt-submit --root .
+printf '{"goal":"change login hashing behavior","tool_input":{"file_path":"tests/test_edgebase.py"}}' | python3 -m edgebase hooks codex-pre-tool-use --root .
 ```
 
 When installed from GitHub, verify:
@@ -75,7 +81,11 @@ Where binaries are available:
 - Gemini CLI: `gemini mcp list`
 - OpenCode: `opencode mcp list`
 
-For Claude Code, also validate that `.claude/settings.json` contains `UserPromptSubmit`, `PreToolUse`, and `PostToolUse`, and that `.claude/skills/edgebase/SKILL.md` plus `.claude/skills/goal/SKILL.md` exist. For clients not installed in the verification environment, validate the generated config shape and the Edgebase MCP stdio handshake.
+For Claude Code, also validate that `.claude/settings.json` contains `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, and `SessionEnd`, and that `.claude/skills/edgebase/SKILL.md` plus `.claude/skills/goal/SKILL.md` exist.
+
+For Codex, validate that `.codex/config.toml` contains `[mcp_servers.edgebase]` and `hooks = true`, `.codex/hooks.json` contains `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, and `Stop`, and `.agents/skills/edgebase/SKILL.md` plus `.agents/skills/goal/SKILL.md` exist.
+
+For clients not installed in the verification environment, validate the generated config shape and the Edgebase MCP stdio handshake.
 
 ## Kill Criteria
 

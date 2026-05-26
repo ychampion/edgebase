@@ -18,6 +18,7 @@ from edgebase.benchmark import run_external
 from edgebase.context import build_context
 from edgebase.doctor import run_doctor
 from edgebase.goal import build_goal_capsule, build_patch_passport
+from edgebase.preflight import load_preflight_state, preflight_status
 from edgebase.graph import build_graph_export, render_dot, render_html, render_json, write_graph_artifacts
 from edgebase.hooks import (
     handle_claude_post_tool_use,
@@ -210,7 +211,7 @@ class EdgebaseTests(unittest.TestCase):
             listed = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
             self.assertIsNotNone(listed)
             tools = listed["result"]["tools"]
-            self.assertEqual([tool["name"] for tool in tools], ["edgebase_context", "edgebase_goal"])
+            self.assertEqual([tool["name"] for tool in tools], ["edgebase_context", "edgebase_goal", "edgebase_checkpoint", "edgebase_fork_plan", "edgebase_resume"])
 
             prompts = server.handle({"jsonrpc": "2.0", "id": 3, "method": "prompts/list"})
             self.assertIsNotNone(prompts)
@@ -350,6 +351,66 @@ class EdgebaseTests(unittest.TestCase):
             self.assertIn("[mcp_servers.edgebase]", codex)
             self.assertIn("enabled = true", codex)
 
+    def test_codex_setup_writes_preflight_hooks_and_skills(self) -> None:
+        with sample_repo() as repo:
+            setup_repo(
+                repo,
+                agents=["codex"],
+                scope="project",
+                install_hooks=True,
+                write_agents_md=True,
+            )
+            codex = (repo / ".codex" / "config.toml").read_text(encoding="utf-8")
+            self.assertIn("[features]", codex)
+            self.assertIn("hooks = true", codex)
+
+            hooks = json.loads((repo / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                [hook["event"] for hook in hooks["hooks"]],
+                ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PreCompact", "Stop"],
+            )
+            self.assertTrue(all("edgebase hooks codex-" in hook["command"] for hook in hooks["hooks"]))
+
+            skill = (repo / ".agents" / "skills" / "edgebase" / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn("edgebase_context", skill)
+            self.assertIn("edgebase_checkpoint", skill)
+            self.assertNotIn("--record-preflight", skill)
+
+            goal_skill = (repo / ".agents" / "skills" / "goal" / "SKILL.md").read_text(encoding="utf-8")
+            self.assertIn("edgebase_goal", goal_skill)
+            self.assertIn("--record-preflight", goal_skill)
+
+            checks = {check.name: check for check in run_doctor(repo, agents=["codex"], scope="project")}
+            self.assertEqual(checks["Codex project config"].status, "ok")
+            self.assertEqual(checks["Codex hooks feature"].status, "ok")
+            self.assertEqual(checks["Codex hooks"].status, "ok")
+            self.assertEqual(checks["Codex /edgebase skill"].status, "ok")
+            self.assertEqual(checks["Codex /goal skill"].status, "ok")
+
+    def test_codex_hooks_merge_and_disable_preserve_unrelated_hooks(self) -> None:
+        with sample_repo() as repo:
+            hooks_path = repo / ".codex" / "hooks.json"
+            hooks_path.parent.mkdir(parents=True)
+            hooks_path.write_text(
+                json.dumps({"hooks": [{"event": "PreToolUse", "command": "echo keep"}], "custom": True}) + "\n",
+                encoding="utf-8",
+            )
+            setup_repo(
+                repo,
+                agents=["codex"],
+                scope="project",
+                install_hooks=True,
+                write_agents_md=False,
+            )
+            installed = json.loads(hooks_path.read_text(encoding="utf-8"))
+            self.assertTrue(installed["custom"])
+            self.assertIn({"event": "PreToolUse", "command": "echo keep"}, installed["hooks"])
+            self.assertEqual(sum("edgebase hooks codex-" in hook["command"] for hook in installed["hooks"]), 6)
+
+            disable_repo(repo, agents=["codex"], scope="project")
+            remaining = json.loads(hooks_path.read_text(encoding="utf-8"))
+            self.assertEqual(remaining, {"custom": True, "hooks": [{"event": "PreToolUse", "command": "echo keep"}]})
+
     def test_disable_removes_project_integrations_and_agent_docs(self) -> None:
         with sample_repo() as repo:
             setup_repo(
@@ -411,10 +472,12 @@ class EdgebaseTests(unittest.TestCase):
             data = json.loads(stdout.getvalue())
             output = data["hookSpecificOutput"]
             self.assertEqual(output["hookEventName"], "UserPromptSubmit")
-            self.assertIn("# Edgebase Context", output["additionalContext"])
+            self.assertIn("# Edgebase Goal Capsule", output["additionalContext"])
             self.assertIn("app/auth.py", output["additionalContext"])
             self.assertIn("Edgebase graph artifacts:", output["additionalContext"])
             self.assertTrue((repo / ".edgebase" / "graphs" / "latest.html").exists())
+            self.assertTrue(preflight_status(repo)["fresh"])
+            self.assertEqual(load_preflight_state(repo)["goal"], "change login hashing behavior")
 
     def test_claude_pre_tool_hook_injects_work_contract(self) -> None:
         with sample_repo() as repo:
@@ -438,10 +501,29 @@ class EdgebaseTests(unittest.TestCase):
             data = json.loads(stdout.getvalue())
             output = data["hookSpecificOutput"]
             self.assertEqual(output["hookEventName"], "PreToolUse")
-            self.assertIn("# Edgebase Work Contract", output["additionalContext"])
-            self.assertIn("app/auth.py", output["additionalContext"])
-            self.assertIn("Edgebase graph artifacts:", output["additionalContext"])
-            self.assertTrue((repo / ".edgebase" / "graphs" / "latest.html").exists())
+            self.assertEqual(output["permissionDecision"], "deny")
+            self.assertIn("no fresh Edgebase Goal Capsule", output["permissionDecisionReason"])
+
+    def test_pre_tool_hook_does_not_block_named_read_tools(self) -> None:
+        with sample_repo() as repo:
+            index_repo(repo)
+            old_stdin = sys.stdin
+            stdout = io.StringIO()
+            try:
+                sys.stdin = io.StringIO(
+                    json.dumps(
+                        {
+                            "tool_name": "Read",
+                            "tool_input": {"file_path": str(repo / "app" / "auth.py")},
+                        }
+                    )
+                )
+                with contextlib.redirect_stdout(stdout):
+                    code = handle_claude_pre_tool_use(repo)
+            finally:
+                sys.stdin = old_stdin
+            self.assertEqual(code, 0)
+            self.assertEqual(stdout.getvalue(), "")
 
     def test_claude_post_tool_hook_emits_edit_delta(self) -> None:
         with sample_repo() as repo:

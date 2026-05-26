@@ -41,16 +41,19 @@ Patch contract:
 The final PR must include changed files, rationale, tests run, regression evidence, and unresolved assumptions.
 ```
 
-Goal Capsules are backed by the local graph index, git state, inferred tests, provenance, and working-tree freshness. They are designed to be pasted into an agent as `/goal ...` or called through the CLI/MCP before any write tool runs. The same agent-facing paths also refresh optional local graph artifacts at `.edgebase/graphs/latest.html`, `.json`, and `.dot`; agents surface the paths without dumping raw graph data into context.
+Goal Capsules are backed by the local graph index, git state, inferred tests, provenance, and working-tree freshness. They are recorded automatically by supported hooks, exposed as `/goal ...` when a manual command is useful, and called through CLI/MCP before write tools run. The same agent-facing paths also refresh optional local graph artifacts at `.edgebase/graphs/latest.html`, `.json`, and `.dot`; agents surface the paths without dumping raw graph data into context.
 
 Edgebase also keeps `AGENTS.md` small, indexes the repository into a rebuildable SQLite graph, and exposes MCP tools that agents can use before editing:
 
 ```text
 edgebase_context(task, changed_files?, budget?)
 edgebase_goal(goal, changed_files?, budget?)
+edgebase_checkpoint(message, budget?)
+edgebase_fork_plan(message, from_id?, branch?, path?, allow_dirty?, budget?)
+edgebase_resume(snapshot_id?)
 ```
 
-The companion context output remains a compact, source-backed capsule: high-signal files, symbols, imports, conservative call edges, inferred tests, owners, churn, freshness, and provenance. Claude Code also gets automatic prompt-time context injection through hooks, so users do not need to remember a special phrase before each task.
+The companion context output remains a compact, source-backed capsule: high-signal files, symbols, imports, conservative call edges, inferred tests, owners, churn, freshness, and provenance. Claude Code and Codex project setup also get an automatic preflight gate, so users do not need to remember a special phrase before each task.
 
 Edgebase is not a vector database, a Neo4j wrapper, or a generic memory product. It is a small local substrate for answering:
 
@@ -94,6 +97,12 @@ To check the installation:
 python3 -m edgebase doctor --scope both
 ```
 
+To bypass only the edit gate for one emergency session without removing MCP config:
+
+```bash
+EDGEBASE_PREFLIGHT=off
+```
+
 ## Paste This Into Your Agent
 
 If you want Claude Code, Codex, Cursor, Gemini CLI, OpenCode, or Windsurf to install it for you, paste:
@@ -117,8 +126,8 @@ Do not add generated architecture summaries to AGENTS.md. Edgebase keeps AGENTS.
 | Edgebase cache/artifacts | `.edgebase/index.sqlite3`, `.edgebase/graphs/latest.*` | none | Rebuildable local graph cache plus optional visual artifacts, ignored by git |
 | Git ignore | `.git/info/exclude` | none | Locally ignores `.edgebase/` without changing committed ignore files |
 | Agent instructions | `AGENTS.md` marker block | none | Tells agents to use Edgebase automatically for broad exploration/editing |
-| Claude Code | `.mcp.json`, `.claude/settings.json`, `.claude/skills/edgebase/SKILL.md`, `.claude/skills/goal/SKILL.md` | none by default | MCP server, automatic UserPromptSubmit context, PreToolUse work contracts, SessionStart/PostToolUse freshness hooks, `/edgebase` and `/goal` skills |
-| Codex | `.codex/config.toml` | `~/.codex/config.toml` | MCP server entry |
+| Claude Code | `.mcp.json`, `.claude/settings.json`, `.claude/skills/edgebase/SKILL.md`, `.claude/skills/goal/SKILL.md` | none by default | MCP server, automatic Goal Capsules, PreToolUse stale-capsule blocking, SessionStart/PostToolUse/PreCompact/SessionEnd hooks, `/edgebase` and `/goal` skills |
+| Codex | `.codex/config.toml`, `.codex/hooks.json`, `.agents/skills/edgebase/SKILL.md`, `.agents/skills/goal/SKILL.md` | `~/.codex/config.toml` | MCP server entry, project hook config, project skills, AGENTS.md routing |
 | Cursor | `.cursor/mcp.json` | `~/.cursor/mcp.json` | MCP server entry |
 | Gemini CLI | `.gemini/settings.json` | `~/.gemini/settings.json` | MCP server entry |
 | OpenCode | `.opencode.json` | `~/.opencode.json` | Enabled local MCP server |
@@ -133,8 +142,9 @@ Setup uses the Python interpreter that ran setup, with `-m edgebase`, instead of
 
 Most users do not run Edgebase manually after setup.
 
-- Claude Code: Edgebase injects a compact context capsule automatically for likely coding prompts through `UserPromptSubmit`, emits pre-edit Work Contracts through `PreToolUse`, refreshes edit deltas through `PostToolUse`, and refreshes graph artifacts for the latest task or edit path. Project skills `/edgebase <task>` and `/goal <goal>` are installed as explicit commands.
-- Codex, Cursor, Gemini CLI, OpenCode, and Windsurf: Edgebase installs MCP config and a marker-bounded `AGENTS.md` instruction telling agents to use `edgebase_context` or `edgebase_goal` automatically before broad code exploration or edits. Those MCP calls update `.edgebase/graphs/latest.*` and return the artifact paths. Whether the tool is called without a reminder depends on each client planner, but no per-task user phrase is required by Edgebase itself.
+- Claude Code: `UserPromptSubmit` records and injects a Goal Capsule before planning. `PreToolUse` blocks Write/Edit/MultiEdit if no fresh capsule exists. `PostToolUse` refreshes the graph after edits. `PreCompact` saves a checkpoint, and `SessionEnd` saves a Patch Passport. Project skills `/edgebase <task>` and `/goal <goal>` are installed as explicit commands.
+- Codex: setup writes MCP config, project `.codex/hooks.json`, `[features] hooks = true`, `.agents/skills/edgebase`, `.agents/skills/goal`, and the `AGENTS.md` marker. Codex uses MCP plus project skills by default; when trusted hook support is active, the same preflight gate records capsules, blocks stale edits, refreshes after edits, checkpoints before compaction, and saves a Patch Passport on stop.
+- Cursor, Gemini CLI, OpenCode, and Windsurf: Edgebase installs MCP config and a marker-bounded `AGENTS.md` instruction telling agents to use `edgebase_context` or `edgebase_goal` automatically before broad code exploration or edits. Those MCP calls update `.edgebase/graphs/latest.*` and return the artifact paths.
 - Any client: the MCP prompts named `edgebase` and `goal` are available for clients that expose MCP prompts or slash-command-style prompt menus.
 
 Useful manual commands:
@@ -143,6 +153,9 @@ Useful manual commands:
 python3 -m edgebase context "change the auth login flow" --budget 1200
 python3 -m edgebase goal "add passwordless login without breaking OAuth" --budget 1200
 python3 -m edgebase passport "add passwordless login without breaking OAuth" --test "python3 -m unittest -v: pass"
+python3 -m edgebase preflight status
+python3 -m edgebase checkpoint "handoff after auth refactor"
+python3 -m edgebase resume
 python3 -m edgebase index --changed
 python3 -m edgebase stats
 python3 -m edgebase doctor --scope both
@@ -164,8 +177,8 @@ Dynamic-language call graphs are confidence-scored. Low-confidence call edges ar
 
 | Agent | Status | Notes |
 | --- | --- | --- |
-| Claude Code | Supported | Project `.mcp.json`; automatic UserPromptSubmit context hook; PreToolUse work contract; async PostToolUse refresh; `/edgebase` and `/goal` project skills |
-| Codex | Supported | Global `~/.codex/config.toml` MCP entry is the verified CLI path; verify with `codex mcp list` |
+| Claude Code | Supported | Project `.mcp.json`; automatic UserPromptSubmit Goal Capsule; PreToolUse stale-capsule block; async PostToolUse refresh; PreCompact checkpoint; SessionEnd Patch Passport; `/edgebase` and `/goal` project skills |
+| Codex | Supported | Project `.codex/config.toml`, `.codex/hooks.json`, `.agents/skills`; global `~/.codex/config.toml` MCP entry for CLI discovery; verify with `codex mcp list` and `edgebase doctor` |
 | Cursor | Supported | Project and global `mcp.json`; Cursor says Composer Agent automatically uses relevant MCP tools |
 | Gemini CLI | Supported | Project and global `settings.json` with `mcpServers` |
 | OpenCode | Supported | Local MCP server under `mcp.edgebase`, `enabled: true` |
@@ -189,18 +202,20 @@ The cache is rebuildable. Git remains the source of truth.
 
 Automation layers:
 
-- prompt hook: Claude Code receives small context next to coding prompts before it starts exploring
-- pre-edit hook: Claude Code receives a Work Contract before Write/Edit/MultiEdit
-- edit hook: Claude Code refreshes touched files and emits edit deltas after Write/Edit/MultiEdit
+- prompt hook: Claude Code and trusted Codex hooks record a Goal Capsule before the agent starts planning
+- pre-edit hook: Write/Edit/MultiEdit is blocked when no fresh Goal Capsule exists
+- edit hook: edited files are reindexed and edit deltas are returned after Write/Edit/MultiEdit
+- compaction hook: `.edgebase/checkpoints/latest.md` preserves the active capsule before context compaction
+- session-end hook: `.edgebase/passports/latest.md` and `.json` preserve changed files and explicit evidence at stop/session end
 - git hook: post-commit refresh keeps the cache aligned with committed changes
-- MCP: every supported agent gets `edgebase_context` and `edgebase_goal` over stdio
+- MCP: every supported agent gets `edgebase_context`, `edgebase_goal`, checkpoint, fork-plan, and resume tools over stdio
 - graph artifacts: hooks and MCP calls refresh self-contained local HTML, JSON, and DOT files and surface their paths as optional visual aids
 - AGENTS marker: static repo instructions stay tiny and tell agents to route structural context through Edgebase
 
 This is not a separate graph UI or a new agent control surface; visualization is kept as a local artifact attached to the existing agent context flow.
 
 See [Architecture](docs/ARCHITECTURE.md) and [Validation](docs/VALIDATION.md).
-The release audit for `v0.1.2` is documented in [Release Audit](docs/RELEASE_AUDIT_0.1.2.md).
+The release audit for `v0.1.3` is documented in [Release Audit](docs/RELEASE_AUDIT_0.1.3.md).
 
 ## Benchmarks
 

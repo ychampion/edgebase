@@ -3,24 +3,34 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from pathlib import Path
 
 from .benchmark import run_benchmark
 from .context import build_context
+from .context_branches import create_checkpoint, create_fork_plan, render_resume, resume_snapshot
 from .doctor import run_doctor
 from .git import changed_files, find_repo_root
 from .goal import build_goal_capsule, build_patch_passport
 from .hooks import (
+    handle_claude_pre_compact,
     handle_claude_pre_tool_use,
     handle_claude_post_tool_use,
+    handle_claude_session_end,
     handle_claude_session_start,
     handle_claude_user_prompt_submit,
+    handle_codex_pre_compact,
+    handle_codex_pre_tool_use,
+    handle_codex_post_tool_use,
+    handle_codex_session_start,
+    handle_codex_stop,
+    handle_codex_user_prompt_submit,
     handle_git_post_commit,
     install_claude_hooks,
+    install_codex_hooks,
     install_git_hook,
 )
 from .indexer import index_repo
 from .mcp import serve
+from .preflight import load_preflight_state, preflight_status, prepare_goal_capsule
 from .setup import ALL_AGENTS, disable_repo, setup_repo
 from .store import Store
 
@@ -66,16 +76,8 @@ def build_parser() -> argparse.ArgumentParser:
         default="project",
         help="Where to write supported MCP configs.",
     )
-    setup_p.add_argument(
-        "--no-hooks",
-        action="store_true",
-        help="Skip git and Claude Code freshness hooks.",
-    )
-    setup_p.add_argument(
-        "--no-agent-docs",
-        action="store_true",
-        help="Do not create AGENTS.md or EDGEBASE.md guidance.",
-    )
+    setup_p.add_argument("--no-hooks", action="store_true", help="Skip git and agent freshness hooks.")
+    setup_p.add_argument("--no-agent-docs", action="store_true", help="Do not create AGENTS.md guidance.")
     setup_p.add_argument(
         "--command",
         default=None,
@@ -96,19 +98,15 @@ def build_parser() -> argparse.ArgumentParser:
         default="project",
         help="Where to remove or disable supported MCP configs.",
     )
-    disable_p.add_argument("--keep-hooks", action="store_true", help="Leave git and Claude Code hooks installed.")
-    disable_p.add_argument("--keep-agent-docs", action="store_true", help="Leave AGENTS.md Edgebase instructions in place.")
+    disable_p.add_argument("--keep-hooks", action="store_true", help="Leave installed hooks in place.")
+    disable_p.add_argument("--keep-agent-docs", action="store_true", help="Leave AGENTS.md Edgebase instructions.")
     disable_p.set_defaults(func=cmd_disable)
 
     context_p = sub.add_parser("context", help="Return a compact context capsule for a task.")
     add_subcommand_root(context_p)
     context_p.add_argument("task", help="Coding task or investigation goal.")
     context_p.add_argument("--changed-file", action="append", default=[], help="Changed file hint.")
-    context_p.add_argument(
-        "--changed",
-        action="store_true",
-        help="Also include changed files from `git status` as changed-file hints.",
-    )
+    context_p.add_argument("--changed", action="store_true", help="Include changed files from `git status`.")
     context_p.add_argument("--budget", type=int, default=1200, help="Approximate token budget.")
     context_p.add_argument("--json", action="store_true", help="Emit JSON with markdown and metadata.")
     context_p.set_defaults(func=cmd_context)
@@ -119,6 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
     goal_p.add_argument("--changed-file", action="append", default=[], help="Changed file hint.")
     goal_p.add_argument("--budget", type=int, default=1200, help="Approximate token budget.")
     goal_p.add_argument("--json", action="store_true", help="Emit the Work Contract JSON schema.")
+    goal_p.add_argument("--record-preflight", action="store_true", help="Record this Goal Capsule as fresh preflight.")
     goal_p.set_defaults(func=cmd_goal)
 
     passport_p = sub.add_parser("passport", help="Return a Patch Passport for the current working tree.")
@@ -134,34 +133,72 @@ def build_parser() -> argparse.ArgumentParser:
     passport_p.add_argument("--budget", type=int, default=1200, help="Approximate token budget.")
     passport_p.set_defaults(func=cmd_passport)
 
+    checkpoint_p = sub.add_parser("checkpoint", help="Save an Edgebase context checkpoint for later resume.")
+    add_subcommand_root(checkpoint_p)
+    checkpoint_p.add_argument("message", help="Checkpoint goal or handoff message.")
+    checkpoint_p.add_argument("--budget", type=int, default=1200, help="Approximate token budget.")
+    checkpoint_p.add_argument("--json", action="store_true", help="Emit machine-readable snapshot JSON.")
+    checkpoint_p.set_defaults(func=cmd_checkpoint)
+
+    fork_p = sub.add_parser("fork-plan", help="Create a git worktree plan from an Edgebase checkpoint.")
+    add_subcommand_root(fork_p)
+    fork_p.add_argument("message", help="Fork objective or handoff message.")
+    fork_p.add_argument("--from-id", default="", help="Checkpoint id to branch from. Defaults to a new checkpoint.")
+    fork_p.add_argument("--branch", default="", help="Worktree branch name. Defaults to edgebase/<message>.")
+    fork_p.add_argument("--path", default="", help="Worktree path. Defaults next to the repo.")
+    fork_p.add_argument("--allow-dirty", action="store_true", help="Allow creating a fork plan from a dirty tree.")
+    fork_p.add_argument("--budget", type=int, default=1200, help="Approximate token budget.")
+    fork_p.add_argument("--json", action="store_true", help="Emit machine-readable snapshot JSON.")
+    fork_p.set_defaults(func=cmd_fork_plan)
+
+    resume_p = sub.add_parser("resume", help="Render a saved Edgebase checkpoint.")
+    add_subcommand_root(resume_p)
+    resume_p.add_argument("snapshot_id", nargs="?", default="", help="Checkpoint id. Defaults to latest.")
+    resume_p.add_argument("--json", action="store_true", help="Emit machine-readable snapshot JSON.")
+    resume_p.set_defaults(func=cmd_resume)
+
+    preflight_p = sub.add_parser("preflight", help="Inspect or refresh the Edgebase pre-edit gate.")
+    add_subcommand_root(preflight_p)
+    preflight_sub = preflight_p.add_subparsers(dest="preflight_command")
+    preflight_status_p = preflight_sub.add_parser("status", help="Show whether the Goal Capsule is fresh.")
+    add_subcommand_root(preflight_status_p)
+    preflight_status_p.add_argument("--json", action="store_true", help="Emit machine-readable status JSON.")
+    preflight_status_p.set_defaults(func=cmd_preflight_status)
+    preflight_refresh_p = preflight_sub.add_parser("refresh", help="Record a fresh Goal Capsule for the gate.")
+    add_subcommand_root(preflight_refresh_p)
+    preflight_refresh_p.add_argument("goal", help="Coding goal to record.")
+    preflight_refresh_p.add_argument("--changed-file", action="append", default=[], help="Changed file hint.")
+    preflight_refresh_p.add_argument("--budget", type=int, default=1200, help="Approximate token budget.")
+    preflight_refresh_p.add_argument("--json", action="store_true", help="Emit the Work Contract JSON schema.")
+    preflight_refresh_p.set_defaults(func=cmd_preflight_refresh)
+
     mcp_p = sub.add_parser("mcp", help="Run the Edgebase MCP server over stdio.")
     add_subcommand_root(mcp_p)
     mcp_p.set_defaults(func=cmd_mcp)
 
-    hooks_p = sub.add_parser("install-hooks", help="Install git and/or Claude Code hooks.")
+    hooks_p = sub.add_parser("install-hooks", help="Install git, Claude Code, and Codex hooks.")
     add_subcommand_root(hooks_p)
     hooks_p.add_argument("--git", action="store_true", help="Install git post-commit hook.")
     hooks_p.add_argument("--claude", action="store_true", help="Install Claude Code hooks.")
+    hooks_p.add_argument("--codex", action="store_true", help="Install Codex hooks.")
     hooks_p.set_defaults(func=cmd_install_hooks)
 
     hook_p = sub.add_parser("hooks", help=argparse.SUPPRESS)
     add_subcommand_root(hook_p)
     hook_sub = hook_p.add_subparsers(dest="hook_command")
-    git_hook = hook_sub.add_parser("git-post-commit")
-    add_subcommand_root(git_hook)
-    git_hook.set_defaults(func=lambda args: handle_git_post_commit(args.root))
-    session_hook = hook_sub.add_parser("claude-session-start")
-    add_subcommand_root(session_hook)
-    session_hook.set_defaults(func=lambda args: handle_claude_session_start(args.root))
-    prompt_hook = hook_sub.add_parser("claude-user-prompt-submit")
-    add_subcommand_root(prompt_hook)
-    prompt_hook.set_defaults(func=lambda args: handle_claude_user_prompt_submit(args.root))
-    pre_hook = hook_sub.add_parser("claude-pre-tool-use")
-    add_subcommand_root(pre_hook)
-    pre_hook.set_defaults(func=lambda args: handle_claude_pre_tool_use(args.root))
-    post_hook = hook_sub.add_parser("claude-post-tool-use")
-    add_subcommand_root(post_hook)
-    post_hook.set_defaults(func=lambda args: handle_claude_post_tool_use(args.root))
+    add_hook_command(hook_sub, "git-post-commit", handle_git_post_commit)
+    add_hook_command(hook_sub, "claude-session-start", handle_claude_session_start)
+    add_hook_command(hook_sub, "claude-user-prompt-submit", handle_claude_user_prompt_submit)
+    add_hook_command(hook_sub, "claude-pre-tool-use", handle_claude_pre_tool_use)
+    add_hook_command(hook_sub, "claude-post-tool-use", handle_claude_post_tool_use)
+    add_hook_command(hook_sub, "claude-pre-compact", handle_claude_pre_compact)
+    add_hook_command(hook_sub, "claude-session-end", handle_claude_session_end)
+    add_hook_command(hook_sub, "codex-session-start", handle_codex_session_start)
+    add_hook_command(hook_sub, "codex-user-prompt-submit", handle_codex_user_prompt_submit)
+    add_hook_command(hook_sub, "codex-pre-tool-use", handle_codex_pre_tool_use)
+    add_hook_command(hook_sub, "codex-post-tool-use", handle_codex_post_tool_use)
+    add_hook_command(hook_sub, "codex-pre-compact", handle_codex_pre_compact)
+    add_hook_command(hook_sub, "codex-stop", handle_codex_stop)
 
     bench_p = sub.add_parser("benchmark", help="Run the validation benchmark harness.")
     add_subcommand_root(bench_p)
@@ -193,6 +230,12 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def add_hook_command(subparsers: argparse._SubParsersAction, name: str, func) -> None:
+    hook = subparsers.add_parser(name)
+    add_subcommand_root(hook)
+    hook.set_defaults(func=lambda args: func(args.root))
+
+
 def add_subcommand_root(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--root",
@@ -212,7 +255,8 @@ def cmd_init(args: argparse.Namespace) -> int:
                 "# Agent Instructions\n\n"
                 "Keep static instructions minimal. For codebase structure, run:\n\n"
                 "```bash\nedgebase context \"<task>\" --budget 1200\n"
-                "edgebase goal \"<goal>\" --budget 1200\n```\n",
+                "edgebase goal \"<goal>\" --budget 1200 --record-preflight\n"
+                "edgebase resume\n```\n",
                 encoding="utf-8",
             )
     print(f"Initialized Edgebase at {root / '.edgebase'}")
@@ -229,9 +273,7 @@ def cmd_index(args: argparse.Namespace) -> int:
     if paths:
         reset = False
     result = index_repo(root, sorted(set(paths)) if paths else None, reset=reset)
-    print(
-        f"Indexed {result.files} files, {result.symbols} symbols, {result.edges} edges at {result.commit_sha}"
-    )
+    print(f"Indexed {result.files} files, {result.symbols} symbols, {result.edges} edges at {result.commit_sha}")
     return 0
 
 
@@ -253,8 +295,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print(f"{result.action}: {result.path} ({result.detail})")
     print("")
     print("Edgebase is enabled for the selected agents.")
-    print("Restart your agent/IDE. Claude Code injects Edgebase context automatically for coding prompts.")
-    print("Other MCP clients get the Edgebase tool and AGENTS.md routing instructions automatically.")
+    print("Restart your agent/IDE. Claude Code and Codex load Edgebase automatically when hooks are trusted.")
+    print("MCP clients also get edgebase_context and edgebase_goal, with AGENTS.md routing instructions.")
     print("Turn it off with: `edgebase disable --scope {}`".format(args.scope))
     return 0
 
@@ -301,7 +343,10 @@ def cmd_context(args: argparse.Namespace) -> int:
 
 
 def cmd_goal(args: argparse.Namespace) -> int:
-    capsule = build_goal_capsule(args.root, args.goal, args.changed_file, args.budget)
+    if args.record_preflight:
+        capsule = prepare_goal_capsule(args.root, args.goal, args.changed_file, args.budget, source="cli-goal")
+    else:
+        capsule = build_goal_capsule(args.root, args.goal, args.changed_file, args.budget)
     if args.json:
         print(json.dumps(capsule.contract.to_dict(), indent=2, sort_keys=True))
     else:
@@ -315,19 +360,97 @@ def cmd_passport(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_checkpoint(args: argparse.Namespace) -> int:
+    try:
+        snapshot = create_checkpoint(args.root, args.message, args.budget)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(snapshot.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(f"Checkpoint {snapshot.id} recorded.")
+        print(f"Resume with: edgebase resume {snapshot.id}")
+    return 0
+
+
+def cmd_fork_plan(args: argparse.Namespace) -> int:
+    try:
+        snapshot = create_fork_plan(
+            args.root,
+            args.message,
+            args.budget,
+            from_id=args.from_id,
+            branch=args.branch,
+            path=args.path,
+            allow_dirty=args.allow_dirty,
+        )
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(snapshot.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(f"Fork plan {snapshot.id} created.")
+        print(f"Worktree: {snapshot.worktree_path}")
+        print(f"Branch: {snapshot.worktree_branch}")
+        print(f"Resume with: {snapshot.to_dict()['next_command']}")
+    return 0
+
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    try:
+        snapshot = resume_snapshot(args.root, args.snapshot_id)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(snapshot.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(render_resume(snapshot))
+    return 0
+
+
+def cmd_preflight_status(args: argparse.Namespace) -> int:
+    status = preflight_status(args.root)
+    if args.json:
+        print(json.dumps(status, indent=2, sort_keys=True))
+    else:
+        state = load_preflight_state(args.root)
+        outcome = "fresh" if status.get("fresh") else "stale"
+        print(f"{outcome}: {status.get('reason')}")
+        if state and state.get("goal"):
+            print(f"goal: {state['goal']}")
+        if state and state.get("created_at_iso"):
+            print(f"created: {state['created_at_iso']}")
+    return 0 if status.get("fresh") else 1
+
+
+def cmd_preflight_refresh(args: argparse.Namespace) -> int:
+    capsule = prepare_goal_capsule(args.root, args.goal, args.changed_file, args.budget, source="cli-preflight-refresh")
+    if args.json:
+        print(json.dumps(capsule.contract.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(capsule.markdown)
+    return 0
+
+
 def cmd_mcp(args: argparse.Namespace) -> int:
     return serve(find_repo_root(args.root))
 
 
 def cmd_install_hooks(args: argparse.Namespace) -> int:
-    if not args.git and not args.claude:
-        print("Choose at least one hook target: --git or --claude", file=sys.stderr)
-        return 2
+    if not args.git and not args.claude and not args.codex:
+        args.git = True
+        args.claude = True
+        args.codex = True
     root = find_repo_root(args.root)
     if args.git:
         print(f"Installed git hook: {install_git_hook(root)}")
     if args.claude:
         print(f"Installed Claude hooks: {install_claude_hooks(root)}")
+    if args.codex:
+        print(f"Installed Codex hooks: {install_codex_hooks(root)}")
     return 0
 
 

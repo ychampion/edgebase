@@ -7,11 +7,18 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable
 
-from .context import build_context
 from .git import changed_files, find_repo_root, is_git_repo
-from .goal import build_goal_capsule, render_edit_delta, render_work_contract
+from .goal import render_edit_delta
 from .graph import graph_artifact_summary, write_graph_artifacts
 from .indexer import index_repo
+from .preflight import (
+    ensure_fresh_preflight,
+    prepare_goal_capsule,
+    preflight_disabled,
+    save_context_checkpoint,
+    save_patch_passport,
+    update_after_edit,
+)
 from .store import Store
 
 
@@ -49,6 +56,16 @@ def uninstall_git_hook(root: str | Path) -> Path:
     return hook_path
 
 
+def hook_entry(repo_root: Path, hook_name: str, matcher: str | None = None, timeout: int = 30, asynchronous: bool = False) -> dict[str, object]:
+    command: dict[str, object] = {"type": "command", "command": hook_command(repo_root, hook_name), "timeout": timeout}
+    if asynchronous:
+        command["async"] = True
+    entry: dict[str, object] = {"hooks": [command]}
+    if matcher is not None:
+        entry["matcher"] = matcher
+    return entry
+
+
 def install_claude_hooks(root: str | Path) -> Path:
     repo_root = Path(root).resolve()
     settings_path = repo_root / ".claude" / "settings.json"
@@ -60,61 +77,53 @@ def install_claude_hooks(root: str | Path) -> Path:
         except json.JSONDecodeError:
             raise RuntimeError(f"Refusing to overwrite invalid JSON: {settings_path}")
     hooks = settings.setdefault("hooks", {})
-    hooks.setdefault("SessionStart", [])
-    session_hook = {
-        "hooks": [
-            {
-                "type": "command",
-                "command": hook_command(repo_root, "claude-session-start"),
-                "timeout": 30,
-            }
-        ]
-    }
-    append_unique(hooks["SessionStart"], session_hook)
-    hooks.setdefault("UserPromptSubmit", [])
-    user_prompt_hook = {
-        "hooks": [
-            {
-                "type": "command",
-                "command": hook_command(repo_root, "claude-user-prompt-submit"),
-                "timeout": 30,
-            }
-        ]
-    }
-    append_unique(hooks["UserPromptSubmit"], user_prompt_hook)
+    append_unique(hooks.setdefault("SessionStart", []), hook_entry(repo_root, "claude-session-start"))
+    append_unique(hooks.setdefault("UserPromptSubmit", []), hook_entry(repo_root, "claude-user-prompt-submit"))
     pre_tool = hooks.setdefault("PreToolUse", [])
-    for matcher in ("Write", "Edit", "MultiEdit"):
-        append_unique(
-            pre_tool,
-            {
-                "matcher": matcher,
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": hook_command(repo_root, "claude-pre-tool-use"),
-                        "timeout": 30,
-                    }
-                ],
-            },
-        )
     post_tool = hooks.setdefault("PostToolUse", [])
     for matcher in ("Write", "Edit", "MultiEdit"):
-        append_unique(
-            post_tool,
-            {
-                "matcher": matcher,
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": hook_command(repo_root, "claude-post-tool-use"),
-                        "async": True,
-                        "timeout": 60,
-                    }
-                ],
-            },
-        )
+        append_unique(pre_tool, hook_entry(repo_root, "claude-pre-tool-use", matcher=matcher))
+        append_unique(post_tool, hook_entry(repo_root, "claude-post-tool-use", matcher=matcher, timeout=60, asynchronous=True))
+    append_unique(hooks.setdefault("PreCompact", []), hook_entry(repo_root, "claude-pre-compact"))
+    append_unique(hooks.setdefault("SessionEnd", []), hook_entry(repo_root, "claude-session-end"))
     settings_path.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return settings_path
+
+
+def install_codex_hooks(root: str | Path) -> Path:
+    repo_root = Path(root).resolve()
+    hooks_path = repo_root / ".codex" / "hooks.json"
+    hooks_path.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict[str, Any] = {}
+    if hooks_path.exists():
+        try:
+            loaded = json.loads(hooks_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Refusing to overwrite invalid JSON: {hooks_path}") from exc
+        if isinstance(loaded, dict):
+            payload = loaded
+    existing_hooks = payload.get("hooks")
+    hooks = existing_hooks if isinstance(existing_hooks, list) else []
+    hooks = [hook for hook in hooks if not codex_hook_runs_edgebase(hook)]
+    hooks.extend(codex_hook_entries(repo_root))
+    payload["hooks"] = hooks
+    hooks_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return hooks_path
+
+
+def codex_hook_entries(repo_root: Path) -> list[dict[str, str]]:
+    return [
+        {"event": "SessionStart", "command": hook_command(repo_root, "codex-session-start")},
+        {"event": "UserPromptSubmit", "command": hook_command(repo_root, "codex-user-prompt-submit")},
+        {"event": "PreToolUse", "command": hook_command(repo_root, "codex-pre-tool-use")},
+        {"event": "PostToolUse", "command": hook_command(repo_root, "codex-post-tool-use")},
+        {"event": "PreCompact", "command": hook_command(repo_root, "codex-pre-compact")},
+        {"event": "Stop", "command": hook_command(repo_root, "codex-stop")},
+    ]
+
+
+def codex_hook_runs_edgebase(entry: object) -> bool:
+    return isinstance(entry, dict) and "edgebase hooks codex-" in str(entry.get("command", ""))
 
 
 def hook_command(repo_root: Path, hook_name: str) -> str:
@@ -132,7 +141,7 @@ def uninstall_claude_hooks(root: str | Path) -> Path:
         raise RuntimeError(f"Refusing to edit invalid JSON: {settings_path}") from exc
     hooks = settings.get("hooks")
     if isinstance(hooks, dict):
-        for event_name in ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse"):
+        for event_name in ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PreCompact", "SessionEnd"):
             entries = hooks.get(event_name)
             if isinstance(entries, list):
                 hooks[event_name] = [entry for entry in entries if not hook_entry_runs_edgebase(entry)]
@@ -145,16 +154,36 @@ def uninstall_claude_hooks(root: str | Path) -> Path:
     return settings_path
 
 
+def uninstall_codex_hooks(root: str | Path) -> Path:
+    hooks_path = Path(root).resolve() / ".codex" / "hooks.json"
+    if not hooks_path.exists():
+        return hooks_path
+    try:
+        payload = json.loads(hooks_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Refusing to edit invalid JSON: {hooks_path}") from exc
+    if not isinstance(payload, dict):
+        hooks_path.unlink()
+        return hooks_path
+    hooks = payload.get("hooks")
+    if isinstance(hooks, list):
+        payload["hooks"] = [hook for hook in hooks if not codex_hook_runs_edgebase(hook)]
+        if payload["hooks"] == []:
+            payload.pop("hooks", None)
+    if not payload:
+        hooks_path.unlink()
+    else:
+        hooks_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return hooks_path
+
+
 def hook_entry_runs_edgebase(entry: object) -> bool:
     if not isinstance(entry, dict):
         return False
     hooks = entry.get("hooks")
     if not isinstance(hooks, list):
         return False
-    for hook in hooks:
-        if isinstance(hook, dict) and "edgebase hooks" in str(hook.get("command", "")):
-            return True
-    return False
+    return any(isinstance(hook, dict) and "edgebase hooks" in str(hook.get("command", "")) for hook in hooks)
 
 
 def append_unique(items: list[object], value: object) -> None:
@@ -166,19 +195,9 @@ def append_optional_section(text: str, section: str) -> str:
     return text + ("\n\n" + section if section else "")
 
 
-def safe_graph_artifact_summary(
-    root: str | Path,
-    task: str | None,
-    changed: list[str],
-    selected_files: Iterable[str] | None,
-) -> str:
+def safe_graph_artifact_summary(root: str | Path, task: str | None, changed: list[str], selected_files: Iterable[str] | None) -> str:
     try:
-        artifacts = write_graph_artifacts(
-            root,
-            task=task,
-            changed_files=changed,
-            selected_files=selected_files,
-        )
+        artifacts = write_graph_artifacts(root, task=task, changed_files=changed, selected_files=selected_files)
     except Exception:
         return ""
     return graph_artifact_summary(artifacts)
@@ -199,10 +218,7 @@ def handle_claude_session_start(root: str | Path) -> int:
     else:
         stats = store.stats()
         changed = changed_files(repo_root)
-        msg = (
-            f"Edgebase graph available: {stats['files']} files, {stats['symbols']} symbols, "
-            f"{stats['edges']} edges. Changed files: {len(changed)}."
-        )
+        msg = f"Edgebase graph available: {stats['files']} files, {stats['symbols']} symbols, {stats['edges']} edges. Changed files: {len(changed)}."
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": msg}}))
     return 0
 
@@ -214,38 +230,25 @@ def handle_claude_user_prompt_submit(root: str | Path) -> int:
         return 0
     repo_root = find_repo_root(root)
     try:
-        store = Store(repo_root)
-        if not store.exists():
-            index_repo(repo_root)
         changed = changed_files(repo_root)
-        capsule = build_context(repo_root, prompt, changed, budget=1100)
-        graph_summary = safe_graph_artifact_summary(repo_root, prompt, changed, capsule.selected_files)
-        msg = (
-            "Edgebase automatic context for this coding prompt. "
-            "Use this source-backed capsule as the first read set before broad exploration or edits.\n\n"
-            f"{append_optional_section(capsule.markdown, graph_summary)}"
-        )
+        capsule = prepare_goal_capsule(repo_root, prompt, changed, budget=1100, source="claude-user-prompt-submit")
+        graph_summary = graph_artifact_summary(capsule.graph_artifacts)
+        msg = "Edgebase Goal Capsule was recorded for this coding prompt. Use it as the planning brief before broad exploration or edits.\n\n" + append_optional_section(capsule.markdown, graph_summary)
     except Exception as exc:
-        msg = f"Edgebase automatic context was unavailable: {exc}. Continue with normal repository exploration."
+        msg = f"Edgebase Goal Capsule was unavailable: {exc}. Continue with normal repository exploration."
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": msg}}))
     return 0
 
 
 def handle_claude_pre_tool_use(root: str | Path) -> int:
     payload = read_json_stdin()
+    if preflight_disabled() or not is_edit_tool(payload):
+        return 0
     repo_root = find_repo_root(root)
     touched = extract_tool_paths(payload, repo_root)
-    goal = extract_goal(payload) or "pending edit"
-    try:
-        capsule = build_goal_capsule(repo_root, goal, touched, budget=700)
-        graph_summary = graph_artifact_summary(capsule.graph_artifacts)
-        msg = (
-            "Edgebase pre-edit Work Contract. Use this contract before writing files.\n\n"
-            f"{append_optional_section(render_work_contract(capsule.contract), graph_summary)}"
-        )
-    except Exception as exc:
-        msg = f"Edgebase pre-edit Work Contract was unavailable: {exc}."
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": msg}}))
+    fresh, status = ensure_fresh_preflight(repo_root, touched, budget=900)
+    if not fresh:
+        print(deny_pre_tool_payload("PreToolUse", status.get("reason") or "Goal Capsule is stale"))
     return 0
 
 
@@ -254,17 +257,54 @@ def handle_claude_post_tool_use(root: str | Path) -> int:
     repo_root = find_repo_root(root)
     touched = extract_tool_paths(payload, repo_root)
     if touched:
-        index_repo(repo_root, touched, reset=False)
         task = extract_goal(payload) or "recent edit"
+        update_after_edit(repo_root, touched, task, budget=900)
         delta = render_edit_delta(repo_root, str(task), touched, budget=700)
         graph_summary = safe_graph_artifact_summary(repo_root, str(task), touched, None)
-        msg = (
-            f"Edgebase refreshed {len(touched)} edited file(s).\n\n"
-            f"{append_optional_section(delta, graph_summary)}"
-        )
+        msg = f"Edgebase refreshed {len(touched)} edited file(s).\n\n" + append_optional_section(delta, graph_summary)
     else:
         msg = "Edgebase hook ran but found no edited file path in the tool input."
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": msg}}))
+    return 0
+
+
+def handle_claude_pre_compact(root: str | Path) -> int:
+    path = save_context_checkpoint(root, "claude-pre-compact")
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreCompact", "additionalContext": f"Edgebase saved a context checkpoint before compaction: {path}"}}))
+    return 0
+
+
+def handle_claude_session_end(root: str | Path) -> int:
+    paths = save_patch_passport(root, "claude-session-end")
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionEnd", "additionalContext": f"Edgebase saved a patch passport: {paths['markdown']}"}}))
+    return 0
+
+
+def handle_codex_session_start(root: str | Path) -> int:
+    return handle_claude_session_start(root)
+
+
+def handle_codex_user_prompt_submit(root: str | Path) -> int:
+    return handle_claude_user_prompt_submit(root)
+
+
+def handle_codex_pre_tool_use(root: str | Path) -> int:
+    return handle_claude_pre_tool_use(root)
+
+
+def handle_codex_post_tool_use(root: str | Path) -> int:
+    return handle_claude_post_tool_use(root)
+
+
+def handle_codex_pre_compact(root: str | Path) -> int:
+    path = save_context_checkpoint(root, "codex-pre-compact")
+    print(json.dumps({"event": "PreCompact", "additionalContext": f"Edgebase saved checkpoint: {path}"}))
+    return 0
+
+
+def handle_codex_stop(root: str | Path) -> int:
+    paths = save_patch_passport(root, "codex-stop")
+    print(json.dumps({"event": "Stop", "additionalContext": f"Edgebase saved patch passport: {paths['markdown']}"}))
     return 0
 
 
@@ -296,40 +336,34 @@ def should_inject_prompt_context(prompt: str) -> bool:
     text = " ".join(prompt.lower().split())
     if not text:
         return False
-    trivial = {
-        "ok",
-        "okay",
-        "yes",
-        "no",
-        "thanks",
-        "thank you",
-        "continue",
-        "go on",
-        "sounds good",
-    }
-    if text in trivial:
+    if text in {"ok", "okay", "yes", "no", "thanks", "thank you", "continue", "go on", "sounds good"}:
         return False
-    hints = (
-        "add",
-        "build",
-        "change",
-        "debug",
-        "error",
-        "fail",
-        "fix",
-        "implement",
-        "install",
-        "migrate",
-        "refactor",
-        "remove",
-        "rename",
-        "review",
-        "test",
-        "update",
-        "where",
-        "why",
-    )
+    hints = ("add", "build", "change", "debug", "error", "fail", "fix", "implement", "install", "migrate", "refactor", "remove", "rename", "review", "test", "update", "where", "why")
     return any(hint in text for hint in hints) or len(text.split()) >= 6
+
+
+def is_edit_tool(payload: dict[str, Any]) -> bool:
+    tool_name = str(payload.get("tool_name") or payload.get("tool") or "").lower()
+    if tool_name:
+        return tool_name in {"write", "edit", "multiedit", "apply_patch"}
+    tool_input = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    return any(key in tool_input for key in ("file_path", "path", "edits"))
+
+
+def deny_pre_tool_payload(event_name: str, reason: object) -> str:
+    return json.dumps(
+        {
+            "hookSpecificOutput": {
+                "hookEventName": event_name,
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    "Edgebase blocked this edit because no fresh Goal Capsule exists. "
+                    f"Reason: {reason}. Run `edgebase goal \"<goal>\" --record-preflight`, use `/goal <goal>`, "
+                    "or submit a coding prompt so Edgebase can inject one automatically. Set EDGEBASE_PREFLIGHT=off only for emergency bypass."
+                ),
+            }
+        }
+    )
 
 
 def read_json_stdin() -> dict[str, Any]:
